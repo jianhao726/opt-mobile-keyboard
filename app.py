@@ -22,6 +22,16 @@ st.markdown(
         color: #666;
         margin-bottom: 0.5rem;
     }
+    /* Tighten vertical spacing around header and mode divider */
+    .block-container {
+        padding-top: 2rem !important;
+    }
+    hr.compact-divider {
+        margin-top: 0.25rem !important;
+        margin-bottom: 0.65rem !important;
+        border: none;
+        border-top: 1px solid rgba(49, 51, 63, 0.16);
+    }
     /* Auto-growing history box up to a compact max-height, then scrollable */
     div.st-key-solo_history_box,
     div.st-key-chat_history_box {
@@ -210,7 +220,7 @@ if new_mode != st.session_state.app_mode:
         st.session_state.active_speaker = "User A"
     st.rerun()
 
-st.divider()
+st.markdown('<hr class="compact-divider">', unsafe_allow_html=True)
 
 # ==============================================================================
 # MODE 1: SINGLE-USER (SOLO TYPING)
