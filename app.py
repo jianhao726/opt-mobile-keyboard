@@ -238,7 +238,7 @@ if st.session_state.app_mode == "Single-User":
                 st.markdown(f"💬 {msg}")
 
     render_live_keyboard_input(
-        label="Type a message (Suggestions update live as you type):",
+        label="Type a message:",
         placeholder="Start typing here...",
     )
 
@@ -278,7 +278,7 @@ else:
 
     badge = "🧑 User A" if active_profile == "User A" else "👩 User B"
     prompt_label = (
-        f"Start the conversation as {badge} (suggestions update live):"
+        f"Start the conversation as {badge}:"
         if not st.session_state.chat_history
         else f"Message as {badge} (predictions adapt live to chat context):"
     )
