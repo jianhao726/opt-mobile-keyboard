@@ -37,7 +37,7 @@ def load_predictor(variant: str) -> OPTKeyboardPredictor:
 if "app_mode" not in st.session_state:
     st.session_state.app_mode = "Single-User"
 if "typed_text" not in st.session_state:
-    st.session_state.typed_text = "My phone battery is at 1%, do you have a "
+    st.session_state.typed_text = ""
 if "solo_messages" not in st.session_state:
     st.session_state.solo_messages = []
 if "chat_history" not in st.session_state:
@@ -189,12 +189,9 @@ if mode_choice is None:
 new_mode = "Multi-User" if mode_choice == "Multi-User (2-Person Chat)" else "Single-User"
 if new_mode != st.session_state.app_mode:
     st.session_state.app_mode = new_mode
-    if new_mode == "Multi-User":
-        st.session_state.typed_text = ""
-        if not st.session_state.chat_history:
-            st.session_state.active_speaker = "User A"
-    else:
-        st.session_state.typed_text = "My phone battery is at 1%, do you have a "
+    st.session_state.typed_text = ""
+    if new_mode == "Multi-User" and not st.session_state.chat_history:
+        st.session_state.active_speaker = "User A"
     st.rerun()
 
 st.divider()
