@@ -22,6 +22,15 @@ st.markdown(
         color: #666;
         margin-bottom: 0.5rem;
     }
+    /* Auto-growing history box up to a compact max-height, then scrollable */
+    div.st-key-solo_history_box,
+    div.st-key-chat_history_box {
+        max-height: 200px !important;
+        max-width: 100% !important;
+        overflow-y: auto !important;
+        padding: 0.85rem 1rem !important;
+        border-radius: 12px !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -116,6 +125,13 @@ def render_live_keyboard_input(label: str, placeholder: str):
     st.text_input(label, **kwargs)
 
 
+def render_history_container(box_key: str):
+    """Creates a bordered container that grows with content up to CSS max-height."""
+    if "key" in inspect.signature(st.container).parameters:
+        return st.container(key=box_key, border=True)
+    return st.container(border=True)
+
+
 # --- Sidebar Controls ---
 with st.sidebar:
     st.header("⚙️ Keyboard Engine Settings")
@@ -204,9 +220,10 @@ if st.session_state.app_mode == "Single-User":
     auto_switch = False
     predictor.user_freq_cache = st.session_state.user_caches[active_profile]
 
+    # Hidden until at least 1 message is sent; expands up to 200px then scrolls
     if st.session_state.solo_messages:
         st.markdown("**Sent Message History**")
-        with st.container(height=200, border=True):
+        with render_history_container("solo_history_box"):
             for msg in st.session_state.solo_messages:
                 st.markdown(f"💬 {msg}")
 
@@ -238,12 +255,10 @@ else:
     active_profile = st.session_state.active_speaker
     predictor.user_freq_cache = st.session_state.user_caches[active_profile]
 
-    # Scrollable chat message thread
-    st.markdown("**Sent Message History**")
-    with st.container(height=260, border=True):
-        if not st.session_state.chat_history:
-            st.caption("Empty conversation")
-        else:
+    # Hidden until the first message is sent; expands up to 200px then scrolls
+    if st.session_state.chat_history:
+        st.markdown("**Sent Message History**")
+        with render_history_container("chat_history_box"):
             for item in st.session_state.chat_history:
                 is_user_a = item["sender"] == "User A"
                 role = "user" if is_user_a else "assistant"
