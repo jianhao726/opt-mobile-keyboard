@@ -82,6 +82,28 @@ def clear_input():
     st.session_state.typed_text = ""
 
 
+def send_current_message(predictor: OPTKeyboardPredictor, active_profile: str, auto_switch: bool = True):
+    """Callback executed before widget instantiation so clearing typed_text is safe."""
+    msg = st.session_state.typed_text.strip()
+    if not msg:
+        return
+    predictor.user_freq_cache = st.session_state.user_caches[active_profile]
+    predictor.update_user_cache(msg)
+    if st.session_state.app_mode == "Single-User":
+        st.session_state.solo_messages.append(msg)
+    else:
+        st.session_state.chat_history.append({"sender": active_profile, "text": msg})
+        if auto_switch:
+            st.session_state.active_speaker = "User B" if active_profile == "User A" else "User A"
+    st.session_state.typed_text = ""
+
+
+def reset_chat_history():
+    """Callback executed before widget instantiation to clear chat and draft safely."""
+    st.session_state.chat_history = []
+    st.session_state.typed_text = ""
+
+
 # --- Sidebar Controls ---
 with st.sidebar:
     st.header("⚙️ Keyboard Engine Settings")
@@ -165,6 +187,7 @@ st.divider()
 # ==============================================================================
 if st.session_state.app_mode == "Single-User":
     active_profile = "Solo"
+    auto_switch = False
     predictor.user_freq_cache = st.session_state.user_caches[active_profile]
 
     if st.session_state.solo_messages:
@@ -268,26 +291,17 @@ for i in range(3):
 
 action_col1, action_col2, action_col3 = st.columns([3, 1, 1])
 with action_col1:
-    if st.button(send_label, type="primary"):
-        msg = st.session_state.typed_text.strip()
-        if msg:
-            predictor.update_user_cache(msg)
-            if st.session_state.app_mode == "Single-User":
-                st.session_state.solo_messages.append(msg)
-            else:
-                st.session_state.chat_history.append({"sender": active_profile, "text": msg})
-                if auto_switch:
-                    st.session_state.active_speaker = "User B" if active_profile == "User A" else "User A"
-            st.session_state.typed_text = ""
-            st.rerun()
+    st.button(
+        send_label,
+        type="primary",
+        on_click=send_current_message,
+        args=(predictor, active_profile, auto_switch),
+    )
 with action_col2:
     st.button("Clear 🗑️", on_click=clear_input)
 with action_col3:
     if st.session_state.app_mode == "Multi-User":
-        if st.button("Reset Chat"):
-            st.session_state.chat_history = []
-            st.session_state.typed_text = ""
-            st.rerun()
+        st.button("Reset Chat", on_click=reset_chat_history)
 
 # Adaptive User Cache Viewer (per active user profile)
 with st.expander(f"🧠 Adaptive Vocabulary Cache ({active_profile})"):
