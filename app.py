@@ -40,11 +40,9 @@ if "typed_text" not in st.session_state:
 if "solo_messages" not in st.session_state:
     st.session_state.solo_messages = []
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history = [
-        {"sender": "User A", "text": "Hey! Are you free for lunch today?"}
-    ]
+    st.session_state.chat_history = []
 if "active_speaker" not in st.session_state:
-    st.session_state.active_speaker = "User B"
+    st.session_state.active_speaker = "User A"
 if "user_caches" not in st.session_state:
     st.session_state.user_caches = {
         "Solo": {},
@@ -99,8 +97,9 @@ def send_current_message(predictor: OPTKeyboardPredictor, active_profile: str, a
 
 
 def reset_chat_history():
-    """Callback executed before widget instantiation to clear chat and draft safely."""
+    """Callback executed before widget instantiation to clear chat and reset to User A."""
     st.session_state.chat_history = []
+    st.session_state.active_speaker = "User A"
     st.session_state.typed_text = ""
 
 
@@ -141,7 +140,7 @@ with st.sidebar:
                 args=(sample,),
             )
     else:
-        st.subheader("💬 2-User Dialogue Scenarios")
+        st.subheader("💬 Optional Quick Scenarios")
         scenarios = [
             ("Lunch Invite", "Hey! Are you free for lunch today?", ""),
             ("Phone Battery", "My phone battery is at 1%, do you have a charger?", "Yes, I have a "),
@@ -149,7 +148,7 @@ with st.sidebar:
         ]
         for idx, (label, msg_a, draft_b) in enumerate(scenarios):
             st.button(
-                f"Scenario: {label}",
+                f"Load: {label}",
                 key=f"scen_{idx}",
                 on_click=start_two_user_scenario,
                 args=(msg_a, draft_b),
@@ -177,7 +176,12 @@ if mode_choice is None:
 new_mode = "Multi-User" if mode_choice == "Multi-User (2-Person Chat)" else "Single-User"
 if new_mode != st.session_state.app_mode:
     st.session_state.app_mode = new_mode
-    st.session_state.typed_text = "" if new_mode == "Multi-User" else "My phone battery is at 1%, do you have a "
+    if new_mode == "Multi-User":
+        st.session_state.typed_text = ""
+        if not st.session_state.chat_history:
+            st.session_state.active_speaker = "User A"
+    else:
+        st.session_state.typed_text = "My phone battery is at 1%, do you have a "
     st.rerun()
 
 st.divider()
@@ -229,7 +233,7 @@ else:
     # Chat message thread
     with st.container(border=True):
         if not st.session_state.chat_history:
-            st.caption("No messages yet. Start typing as User A below!")
+            st.caption("Empty conversation — type below as User A to send the first message.")
         else:
             for item in st.session_state.chat_history[-8:]:
                 is_user_a = item["sender"] == "User A"
@@ -239,8 +243,13 @@ else:
                     st.markdown(f"**{item['sender']}:** {item['text']}")
 
     badge = "🧑 User A" if active_profile == "User A" else "👩 User B"
+    prompt_label = (
+        f"Start the conversation as {badge}:"
+        if not st.session_state.chat_history
+        else f"Message as {badge} (predictions adapt to conversation context):"
+    )
     st.text_area(
-        f"Replying as {badge} (predictions adapt to conversation context):",
+        prompt_label,
         key="typed_text",
         height=90,
         placeholder=f"Type {active_profile}'s message here...",
