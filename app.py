@@ -240,6 +240,7 @@ else:
 
     # Chat message thread
     with st.container(border=True):
+        st.markdown("**Sent Message History**")
         if not st.session_state.chat_history:
             st.caption("Empty conversation")
         else:
