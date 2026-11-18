@@ -241,7 +241,7 @@ else:
     # Chat message thread
     with st.container(border=True):
         if not st.session_state.chat_history:
-            st.caption("Empty conversation — type below as User A to send the first message.")
+            st.caption("Empty conversation")
         else:
             for item in st.session_state.chat_history[-8:]:
                 is_user_a = item["sender"] == "User A"
