@@ -1,3 +1,4 @@
+import inspect
 import streamlit as st
 from predictor import OPTKeyboardPredictor, VARIANT_METADATA
 
@@ -52,7 +53,7 @@ if "user_caches" not in st.session_state:
 
 
 def apply_suggestion(word: str, mode: str):
-    """Inserts next word or completes partial word inside the active draft box."""
+    """Inserts next word or completes partial word inside the active input box."""
     current = st.session_state.typed_text
     if mode == "Starter" or not current.strip():
         st.session_state.typed_text = f"{word} "
@@ -101,6 +102,18 @@ def reset_chat_history():
     st.session_state.chat_history = []
     st.session_state.active_speaker = "User A"
     st.session_state.typed_text = ""
+
+
+def render_live_keyboard_input(label: str, placeholder: str):
+    """Single-line input with real-time keystroke updates (no Ctrl+Enter needed)."""
+    supports_live = "live" in inspect.signature(st.text_input).parameters
+    kwargs = {
+        "key": "typed_text",
+        "placeholder": placeholder,
+    }
+    if supports_live:
+        kwargs["live"] = "150ms"
+    st.text_input(label, **kwargs)
 
 
 # --- Sidebar Controls ---
@@ -200,10 +213,8 @@ if st.session_state.app_mode == "Single-User":
             for msg in st.session_state.solo_messages[-5:]:
                 st.markdown(f"💬 {msg}")
 
-    st.text_area(
-        "Type a message (end with a space for Next-Word prediction, or type partial letters for Prefix Completion):",
-        key="typed_text",
-        height=100,
+    render_live_keyboard_input(
+        label="Type a message (suggestions update live as you type):",
         placeholder="Start typing here...",
     )
 
@@ -244,14 +255,12 @@ else:
 
     badge = "🧑 User A" if active_profile == "User A" else "👩 User B"
     prompt_label = (
-        f"Start the conversation as {badge}:"
+        f"Start the conversation as {badge} (suggestions update live):"
         if not st.session_state.chat_history
-        else f"Message as {badge} (predictions adapt to conversation context):"
+        else f"Message as {badge} (predictions adapt live to chat context):"
     )
-    st.text_area(
-        prompt_label,
-        key="typed_text",
-        height=90,
+    render_live_keyboard_input(
+        label=prompt_label,
         placeholder=f"Type {active_profile}'s message here...",
     )
 
