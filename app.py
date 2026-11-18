@@ -205,9 +205,9 @@ if st.session_state.app_mode == "Single-User":
     predictor.user_freq_cache = st.session_state.user_caches[active_profile]
 
     if st.session_state.solo_messages:
-        with st.container(border=True):
-            st.markdown("**Sent Message History**")
-            for msg in st.session_state.solo_messages[-5:]:
+        st.markdown("**Sent Message History**")
+        with st.container(height=200, border=True):
+            for msg in st.session_state.solo_messages:
                 st.markdown(f"💬 {msg}")
 
     render_live_keyboard_input(
@@ -238,13 +238,13 @@ else:
     active_profile = st.session_state.active_speaker
     predictor.user_freq_cache = st.session_state.user_caches[active_profile]
 
-    # Chat message thread
-    with st.container(border=True):
-        st.markdown("**Sent Message History**")
+    # Scrollable chat message thread
+    st.markdown("**Sent Message History**")
+    with st.container(height=260, border=True):
         if not st.session_state.chat_history:
             st.caption("Empty conversation")
         else:
-            for item in st.session_state.chat_history[-8:]:
+            for item in st.session_state.chat_history:
                 is_user_a = item["sender"] == "User A"
                 role = "user" if is_user_a else "assistant"
                 avatar = "🧑" if is_user_a else "👩"
