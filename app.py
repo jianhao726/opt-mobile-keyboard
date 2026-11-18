@@ -228,7 +228,7 @@ if st.session_state.app_mode == "Single-User":
                 st.markdown(f"💬 {msg}")
 
     render_live_keyboard_input(
-        label="Type a message (suggestions update live as you type):",
+        label="Type a message (Suggestions update live as you type):",
         placeholder="Start typing here...",
     )
 
