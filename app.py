@@ -1,5 +1,6 @@
 import inspect
 import streamlit as st
+import streamlit.components.v1 as components
 from predictor import OPTKeyboardPredictor, VARIANT_METADATA
 
 st.set_page_config(
@@ -31,6 +32,11 @@ st.markdown(
         margin-bottom: 0.65rem !important;
         border: none;
         border-top: 1px solid rgba(49, 51, 63, 0.16);
+    }
+    /* Hide the 0px auto-focus iframe wrapper so it adds no vertical spacing */
+    .stElementContainer:has(iframe[height="0"]),
+    .element-container:has(iframe[height="0"]) {
+        display: none !important;
     }
     /* Auto-growing history box up to a compact max-height, then scrollable */
     div.st-key-solo_history_box,
@@ -71,6 +77,13 @@ if "user_caches" not in st.session_state:
         "User A": {},
         "User B": {},
     }
+if "focus_tick" not in st.session_state:
+    st.session_state.focus_tick = 1
+
+
+def request_input_focus():
+    """Signals the browser to return cursor focus to the main text input."""
+    st.session_state.focus_tick += 1
 
 
 def apply_suggestion(word: str, mode: str):
@@ -95,20 +108,23 @@ def confirm_suggestion(
     word: str,
     mode: str,
 ):
-    """Applies the chosen word and updates the active user's personal cache."""
+    """Applies the chosen word, updates personal cache, and keeps focus in input."""
     apply_suggestion(word, mode)
     predictor.user_freq_cache = st.session_state.user_caches[active_profile]
     predictor.update_user_cache(word)
+    request_input_focus()
 
 
 def set_sample_prompt(prompt_text: str):
     st.session_state.typed_text = prompt_text
+    request_input_focus()
 
 
 def start_two_user_scenario(opening_msg: str, reply_prefix: str = ""):
     st.session_state.chat_history = [{"sender": "User A", "text": opening_msg}]
     st.session_state.active_speaker = "User B"
     st.session_state.typed_text = reply_prefix
+    request_input_focus()
 
 
 def accept_correction(
@@ -124,14 +140,17 @@ def accept_correction(
         predictor.user_freq_cache = st.session_state.user_caches[active_profile]
         predictor.update_user_cache(replacement)
     st.session_state.dismissed_spelling = None
+    request_input_focus()
 
 
 def dismiss_correction(signature):
     st.session_state.dismissed_spelling = signature
+    request_input_focus()
 
 
 def clear_input():
     st.session_state.typed_text = ""
+    request_input_focus()
 
 
 def send_current_message(
@@ -142,6 +161,7 @@ def send_current_message(
     """Callback executed before widget instantiation so clearing typed_text is safe."""
     msg = st.session_state.typed_text.strip()
     if not msg:
+        request_input_focus()
         return
     predictor.user_freq_cache = st.session_state.user_caches[active_profile]
     predictor.update_user_cache(msg)
@@ -154,6 +174,7 @@ def send_current_message(
                 "User B" if active_profile == "User A" else "User A"
             )
     st.session_state.typed_text = ""
+    request_input_focus()
 
 
 def reset_chat_history():
@@ -161,10 +182,43 @@ def reset_chat_history():
     st.session_state.chat_history = []
     st.session_state.active_speaker = "User A"
     st.session_state.typed_text = ""
+    request_input_focus()
+
+
+def inject_input_autofocus(focus_tick: int):
+    """Focuses the main text input and moves the caret to the end of the text."""
+    components.html(
+        f"""
+        <!-- focus_tick: {focus_tick} -->
+        <script>
+        (function() {{
+            const parentDoc = window.parent.document;
+            let attempts = 0;
+            function focusInput() {{
+                const input = parentDoc.querySelector('[data-testid="stTextInput"] input');
+                if (input) {{
+                    input.focus({{ preventScroll: true }});
+                    const len = input.value ? input.value.length : 0;
+                    try {{
+                        input.setSelectionRange(len, len);
+                    }} catch (e) {{}}
+                }}
+                attempts += 1;
+                if (attempts < 6) {{
+                    setTimeout(focusInput, 40);
+                }}
+            }}
+            requestAnimationFrame(focusInput);
+        }})();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
 
 
 def render_live_keyboard_input(label: str, placeholder: str):
-    """Single-line input with real-time keystroke updates when supported."""
+    """Single-line input with real-time keystroke updates and auto-focus retention."""
     supports_live = "live" in inspect.signature(st.text_input).parameters
     kwargs = {
         "key": "typed_text",
@@ -173,6 +227,7 @@ def render_live_keyboard_input(label: str, placeholder: str):
     if supports_live:
         kwargs["live"] = "150ms"
     st.text_input(label, **kwargs)
+    inject_input_autofocus(st.session_state.focus_tick)
 
 
 def render_history_container(box_key: str):
@@ -276,6 +331,7 @@ if new_mode != st.session_state.app_mode:
     st.session_state.typed_text = ""
     if new_mode == "Multi-User" and not st.session_state.chat_history:
         st.session_state.active_speaker = "User A"
+    request_input_focus()
     st.rerun()
 
 st.markdown('<hr class="compact-divider">', unsafe_allow_html=True)
@@ -316,6 +372,7 @@ else:
             options=["User A", "User B"],
             key="active_speaker",
             selection_mode="single",
+            on_change=request_input_focus,
         )
     with ctrl_col2:
         auto_switch = st.checkbox("Auto-switch turn", value=True)
