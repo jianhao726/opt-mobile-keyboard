@@ -13,6 +13,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 BASE_MODEL_NAME = "facebook/opt-125m"
 ADAPTER_DIR = "./models/opt-125m-lora-adapter"
 
+PUNCTUATION_TOKENS = (".", ",", "?", "!")
+
 PROFANITY_BLOCKLIST = {
     "damn", "hell", "shit", "fuck", "bitch", "bastard", "asshole", "crap", "idiot"
 }
@@ -134,6 +136,7 @@ class OPTKeyboardPredictor:
     def _build_vocabulary_index(self):
         vocab = self.tokenizer.get_vocab()
         self.whole_word_ids = []
+        self.punct_ids = []
         self.id_to_word = {}
         self.word_to_ids = {}
 
@@ -150,7 +153,16 @@ class OPTKeyboardPredictor:
                     lower_w = clean_word.lower()
                     self.word_to_ids.setdefault(lower_w, []).append(token_id)
 
+        for p_tok in PUNCTUATION_TOKENS:
+            tok_id = vocab.get(p_tok)
+            if tok_id is not None:
+                self.punct_ids.append(tok_id)
+                self.id_to_word[tok_id] = p_tok
+
         self.whole_word_tensor = torch.tensor(self.whole_word_ids, dtype=torch.long)
+        self.whole_word_and_punct_tensor = torch.tensor(
+            self.whole_word_ids + self.punct_ids, dtype=torch.long
+        )
 
     def update_user_cache(self, text: str):
         words = [w.strip(".,!?;:'\"") for w in text.split()]
@@ -303,7 +315,11 @@ class OPTKeyboardPredictor:
                     log_probs[tok_id] += cache_weight * math.log(1.0 + count)
 
         if mode == "Next-Word":
-            candidate_ids = self.whole_word_tensor
+            # Allow sentence-ending/clause punctuation when context ends with a word/number
+            if context_prefix and context_prefix[-1].isalnum():
+                candidate_ids = self.whole_word_and_punct_tensor
+            else:
+                candidate_ids = self.whole_word_tensor
         else:
             p_lower = partial_prefix.lower()
             matched_ids = [
