@@ -3,6 +3,8 @@ import streamlit as st
 import streamlit.components.v1 as components
 from predictor import OPTKeyboardPredictor, VARIANT_METADATA
 
+PUNCTUATION_SYMBOLS = {".", ",", "?", "!"}
+
 st.set_page_config(
     page_title="OPT Smart Mobile Keyboard",
     page_icon="📱",
@@ -87,9 +89,12 @@ def request_input_focus():
 
 
 def apply_suggestion(word: str, mode: str):
-    """Inserts next word or completes partial word inside the active input box."""
+    """Inserts next word, attaches punctuation directly, or completes partial word."""
     current = st.session_state.typed_text
-    if mode == "Starter" or not current.strip():
+    if word in PUNCTUATION_SYMBOLS:
+        base = current.rstrip()
+        st.session_state.typed_text = f"{base}{word} " if base else f"{word} "
+    elif mode == "Starter" or not current.strip():
         st.session_state.typed_text = f"{word} "
     elif mode == "Next-Word":
         sep = "" if current.endswith((" ", "\t", "\n")) else " "
@@ -108,7 +113,7 @@ def confirm_suggestion(
     word: str,
     mode: str,
 ):
-    """Applies the chosen word, updates personal cache, and keeps focus in input."""
+    """Applies the chosen word/symbol, updates personal cache, and keeps focus in input."""
     apply_suggestion(word, mode)
     predictor.user_freq_cache = st.session_state.user_caches[active_profile]
     predictor.update_user_cache(word)
@@ -449,7 +454,13 @@ if spelling_enabled and draft_for_spelling:
         preceding_context = (
             " ".join(m["text"] for m in st.session_state.chat_history[-2:]) + " "
         )
-    corrections = predictor.spelling_suggestions(draft_for_spelling, preceding_context)
+
+    if hasattr(predictor, "spelling_suggestions"):
+        corrections = predictor.spelling_suggestions(draft_for_spelling, preceding_context)
+    else:
+        single = predictor.spelling_suggestion(draft_for_spelling, preceding_context)
+        corrections = [single] if single else []
+
     for correction in corrections:
         word_sig = (
             st.session_state.app_mode,
