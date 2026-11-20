@@ -30,22 +30,48 @@ st.markdown(
         font-weight: 500;
         margin-bottom: 0.35rem;
     }
+    /* Force input bar + WhatsApp send button onto a single horizontal row on ALL screen widths */
+    [data-testid="stHorizontalBlock"]:has(.st-key-whatsapp_send_btn) {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        align-items: center !important;
+        gap: 0.45rem !important;
+        width: 100% !important;
+    }
+    [data-testid="stHorizontalBlock"]:has(.st-key-whatsapp_send_btn) > [data-testid="stColumn"]:first-child,
+    [data-testid="stHorizontalBlock"]:has(.st-key-whatsapp_send_btn) > [data-testid="column"]:first-child {
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
+        width: auto !important;
+    }
+    [data-testid="stHorizontalBlock"]:has(.st-key-whatsapp_send_btn) > [data-testid="stColumn"]:last-child,
+    [data-testid="stHorizontalBlock"]:has(.st-key-whatsapp_send_btn) > [data-testid="column"]:last-child {
+        flex: 0 0 2.6rem !important;
+        min-width: 2.6rem !important;
+        max-width: 2.6rem !important;
+        width: 2.6rem !important;
+    }
     /* Rounded WhatsApp-style text bar */
     [data-testid="stTextInput"] div[data-baseweb="input"] {
         border-radius: 20px !important;
         padding-left: 0.35rem !important;
     }
-    /* WhatsApp-style inline send button beside the input bar */
+    /* Circular WhatsApp-style inline send button beside the input bar */
     .st-key-whatsapp_send_btn button,
     .stButton > button[kind="primary"] {
         background-color: #25D366 !important;
         border-color: #25D366 !important;
         color: #FFFFFF !important;
-        border-radius: 999px !important;
-        height: 2.55rem !important;
-        min-height: 2.55rem !important;
-        padding: 0 0.75rem !important;
-        font-size: 1.15rem !important;
+        border-radius: 50% !important;
+        width: 2.6rem !important;
+        height: 2.6rem !important;
+        min-height: 2.6rem !important;
+        padding: 0 !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        font-size: 1.1rem !important;
         line-height: 1 !important;
         box-shadow: 0 2px 6px rgba(37, 211, 102, 0.35) !important;
         transition: background-color 0.15s ease, transform 0.1s ease !important;
@@ -60,7 +86,41 @@ st.markdown(
     .stButton > button[kind="primary"]:active {
         background-color: #128C7E !important;
         border-color: #128C7E !important;
-        transform: scale(0.96);
+        transform: scale(0.95);
+    }
+    /* Keep the 4 suggestion chips on a single horizontal row on mobile screens */
+    [data-testid="stHorizontalBlock"]:has(.st-key-empty_punct),
+    [data-testid="stHorizontalBlock"]:has([class*="st-key-punct_"]) {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        gap: 0.35rem !important;
+    }
+    [data-testid="stHorizontalBlock"]:has(.st-key-empty_punct) > [data-testid="stColumn"],
+    [data-testid="stHorizontalBlock"]:has(.st-key-empty_punct) > [data-testid="column"],
+    [data-testid="stHorizontalBlock"]:has([class*="st-key-punct_"]) > [data-testid="stColumn"],
+    [data-testid="stHorizontalBlock"]:has([class*="st-key-punct_"]) > [data-testid="column"] {
+        flex: 1 1 0 !important;
+        min-width: 0 !important;
+        width: auto !important;
+    }
+    [data-testid="stHorizontalBlock"]:has(.st-key-empty_punct) > [data-testid="stColumn"]:last-child,
+    [data-testid="stHorizontalBlock"]:has(.st-key-empty_punct) > [data-testid="column"]:last-child,
+    [data-testid="stHorizontalBlock"]:has([class*="st-key-punct_"]) > [data-testid="stColumn"]:last-child,
+    [data-testid="stHorizontalBlock"]:has([class*="st-key-punct_"]) > [data-testid="column"]:last-child {
+        flex: 0 0 4.1rem !important;
+        min-width: 4.1rem !important;
+        width: 4.1rem !important;
+    }
+    @media (max-width: 640px) {
+        [data-testid="stHorizontalBlock"]:has(.st-key-empty_punct) button,
+        [data-testid="stHorizontalBlock"]:has([class*="st-key-punct_"]) button {
+            padding: 0.45rem 0.2rem !important;
+            font-size: 0.78rem !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+        }
     }
     /* Tighten vertical spacing around header and mode divider */
     .block-container {
