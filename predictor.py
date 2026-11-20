@@ -69,6 +69,7 @@ class OPTKeyboardPredictor:
         self.variant = variant
         self.variant_info = VARIANT_METADATA.get(variant, {})
         self.user_freq_cache = {}
+        self._last_log_probs_cache = (None, None)
         self._build_vocabulary_index()
 
     @classmethod
@@ -160,9 +161,7 @@ class OPTKeyboardPredictor:
                 self.id_to_word[tok_id] = p_tok
 
         self.whole_word_tensor = torch.tensor(self.whole_word_ids, dtype=torch.long)
-        self.whole_word_and_punct_tensor = torch.tensor(
-            self.whole_word_ids + self.punct_ids, dtype=torch.long
-        )
+        self.punct_tensor = torch.tensor(self.punct_ids, dtype=torch.long)
 
     def update_user_cache(self, text: str):
         words = [w.strip(".,!?;:'\"") for w in text.split()]
@@ -275,6 +274,10 @@ class OPTKeyboardPredictor:
         if not context_text.strip():
             context_text = self.tokenizer.bos_token or "</s>"
 
+        cached_ctx, cached_probs = self._last_log_probs_cache
+        if cached_ctx == context_text and cached_probs is not None:
+            return cached_probs
+
         inputs = self.tokenizer(
             context_text,
             return_tensors="pt",
@@ -286,7 +289,29 @@ class OPTKeyboardPredictor:
             outputs = self.model(**inputs)
             next_logits = outputs.logits[0, -1, :].float().cpu()
             log_probs = torch.log_softmax(next_logits, dim=-1)
+
+        self._last_log_probs_cache = (context_text, log_probs)
         return log_probs
+
+    def suggest_punctuation(self, input_text: str):
+        """Scores {'.', ',', '?', '!'} via OPT-125M for the current draft."""
+        if len(self.punct_ids) == 0:
+            return None
+
+        stripped = input_text.rstrip()
+        if not stripped or not stripped[-1].isalnum():
+            return None
+
+        # Require at least one completed word (trailing space or 2+ words)
+        if not input_text.endswith(" ") and " " not in stripped:
+            return None
+
+        log_probs = self._get_next_token_log_probs(stripped)
+        punct_scores = log_probs[self.punct_tensor]
+        probs = torch.softmax(punct_scores, dim=-1)
+        best_idx = int(torch.argmax(probs).item())
+        best_token_id = self.punct_ids[best_idx]
+        return self.id_to_word[best_token_id], round(probs[best_idx].item(), 4)
 
     def suggest(self, input_text: str, top_k: int = 3, cache_weight: float = 0.35):
         start_time = time.perf_counter()
@@ -307,7 +332,7 @@ class OPTKeyboardPredictor:
             else:
                 context_prefix, partial_prefix = "", parts[0]
 
-        log_probs = self._get_next_token_log_probs(context_prefix)
+        log_probs = self._get_next_token_log_probs(context_prefix).clone()
 
         if self.user_freq_cache and cache_weight > 0:
             for cached_word, count in self.user_freq_cache.items():
@@ -315,11 +340,7 @@ class OPTKeyboardPredictor:
                     log_probs[tok_id] += cache_weight * math.log(1.0 + count)
 
         if mode == "Next-Word":
-            # Allow sentence-ending/clause punctuation when context ends with a word/number
-            if context_prefix and context_prefix[-1].isalnum():
-                candidate_ids = self.whole_word_and_punct_tensor
-            else:
-                candidate_ids = self.whole_word_tensor
+            candidate_ids = self.whole_word_tensor
         else:
             p_lower = partial_prefix.lower()
             matched_ids = [
