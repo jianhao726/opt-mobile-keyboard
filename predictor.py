@@ -2,11 +2,12 @@ import gc
 import math
 import os
 import re
-from functools import lru_cache
-from spellchecker import SpellChecker
 import time
+from functools import lru_cache
+
 import torch
 from peft import PeftModel
+from spellchecker import SpellChecker
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 BASE_MODEL_NAME = "facebook/opt-125m"
@@ -70,8 +71,11 @@ class OPTKeyboardPredictor:
 
     @classmethod
     def from_variant(cls, variant: str = "lora_int8", device: str = "cpu"):
-        tok_source = ADAPTER_DIR if os.path.isdir(ADAPTER_DIR) else BASE_MODEL_NAME
-        tokenizer = AutoTokenizer.from_pretrained(tok_source)
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(ADAPTER_DIR)
+        except Exception:
+            tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_NAME)
+
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
@@ -131,7 +135,7 @@ class OPTKeyboardPredictor:
         vocab = self.tokenizer.get_vocab()
         self.whole_word_ids = []
         self.id_to_word = {}
-        self.word_to_id = {}
+        self.word_to_ids = {}
 
         for token_str, token_id in vocab.items():
             if token_str.startswith("Ġ"):
@@ -144,8 +148,7 @@ class OPTKeyboardPredictor:
                     self.whole_word_ids.append(token_id)
                     self.id_to_word[token_id] = clean_word
                     lower_w = clean_word.lower()
-                    if lower_w not in self.word_to_id:
-                        self.word_to_id[lower_w] = token_id
+                    self.word_to_ids.setdefault(lower_w, []).append(token_id)
 
         self.whole_word_tensor = torch.tensor(self.whole_word_ids, dtype=torch.long)
 
@@ -286,8 +289,7 @@ class OPTKeyboardPredictor:
 
         if self.user_freq_cache and cache_weight > 0:
             for cached_word, count in self.user_freq_cache.items():
-                tok_id = self.word_to_id.get(cached_word)
-                if tok_id is not None:
+                for tok_id in self.word_to_ids.get(cached_word, []):
                     log_probs[tok_id] += cache_weight * math.log(1.0 + count)
 
         if mode == "Next-Word":
@@ -300,11 +302,17 @@ class OPTKeyboardPredictor:
                 if w.lower().startswith(p_lower) and len(w) > len(partial_prefix)
             ]
             if not matched_ids:
-                custom_matches = [
-                    (w, 0.90)
-                    for w in self.user_freq_cache
-                    if w.startswith(p_lower) and len(w) > len(partial_prefix)
-                ]
+                custom_matches = []
+                for w, _ in sorted(
+                    self.user_freq_cache.items(), key=lambda item: -item[1]
+                ):
+                    if w.startswith(p_lower) and len(w) > len(partial_prefix):
+                        display_w = (
+                            w.capitalize()
+                            if partial_prefix and partial_prefix[0].isupper()
+                            else w
+                        )
+                        custom_matches.append((display_w, 0.90))
                 latency_ms = (time.perf_counter() - start_time) * 1000
                 return custom_matches[:top_k], round(latency_ms, 2), mode
             candidate_ids = torch.tensor(matched_ids, dtype=torch.long)
