@@ -25,6 +25,43 @@ st.markdown(
         color: #666;
         margin-bottom: 0.5rem;
     }
+    .keyboard-input-label {
+        font-size: 0.875rem;
+        font-weight: 500;
+        margin-bottom: 0.35rem;
+    }
+    /* Rounded WhatsApp-style text bar */
+    [data-testid="stTextInput"] div[data-baseweb="input"] {
+        border-radius: 20px !important;
+        padding-left: 0.35rem !important;
+    }
+    /* WhatsApp-style inline send button beside the input bar */
+    .st-key-whatsapp_send_btn button,
+    .stButton > button[kind="primary"] {
+        background-color: #25D366 !important;
+        border-color: #25D366 !important;
+        color: #FFFFFF !important;
+        border-radius: 999px !important;
+        height: 2.55rem !important;
+        min-height: 2.55rem !important;
+        padding: 0 0.75rem !important;
+        font-size: 1.15rem !important;
+        line-height: 1 !important;
+        box-shadow: 0 2px 6px rgba(37, 211, 102, 0.35) !important;
+        transition: background-color 0.15s ease, transform 0.1s ease !important;
+    }
+    .st-key-whatsapp_send_btn button:hover,
+    .stButton > button[kind="primary"]:hover {
+        background-color: #1EBE5D !important;
+        border-color: #1EBE5D !important;
+        color: #FFFFFF !important;
+    }
+    .st-key-whatsapp_send_btn button:active,
+    .stButton > button[kind="primary"]:active {
+        background-color: #128C7E !important;
+        border-color: #128C7E !important;
+        transform: scale(0.96);
+    }
     /* Tighten vertical spacing around header and mode divider */
     .block-container {
         padding-top: 2rem !important;
@@ -167,12 +204,6 @@ def dismiss_correction(signature):
     request_input_focus()
 
 
-def clear_input():
-    st.session_state.typed_text = ""
-    st.session_state.dismissed_spellings.clear()
-    request_input_focus()
-
-
 def send_current_message(
     predictor: OPTKeyboardPredictor,
     active_profile: str,
@@ -239,16 +270,36 @@ def inject_input_autofocus(focus_tick: int):
     )
 
 
-def render_live_keyboard_input(label: str, placeholder: str):
-    """Single-line input with real-time keystroke updates and auto-focus retention."""
-    supports_live = "live" in inspect.signature(st.text_input).parameters
-    kwargs = {
-        "key": "typed_text",
-        "placeholder": placeholder,
-    }
-    if supports_live:
-        kwargs["live"] = "150ms"
-    st.text_input(label, **kwargs)
+def render_live_keyboard_input(
+    label: str,
+    placeholder: str,
+    predictor: OPTKeyboardPredictor,
+    active_profile: str,
+    auto_switch: bool,
+    send_tooltip: str,
+):
+    """Single-line input with real-time keystroke updates, inline send button, and auto-focus."""
+    st.markdown(f"<div class='keyboard-input-label'>{label}</div>", unsafe_allow_html=True)
+    input_col, send_col = st.columns([7.5, 1])
+    with input_col:
+        supports_live = "live" in inspect.signature(st.text_input).parameters
+        kwargs = {
+            "key": "typed_text",
+            "placeholder": placeholder,
+            "label_visibility": "collapsed",
+        }
+        if supports_live:
+            kwargs["live"] = "150ms"
+        st.text_input(label, **kwargs)
+    with send_col:
+        st.button(
+            "➤",
+            key="whatsapp_send_btn",
+            type="primary",
+            help=send_tooltip,
+            on_click=send_current_message,
+            args=(predictor, active_profile, auto_switch),
+        )
     inject_input_autofocus(st.session_state.focus_tick)
 
 
@@ -377,16 +428,19 @@ if st.session_state.app_mode == "Single-User":
     render_live_keyboard_input(
         label="Type a message:",
         placeholder="Start typing here...",
+        predictor=predictor,
+        active_profile=active_profile,
+        auto_switch=auto_switch,
+        send_tooltip="Send message",
     )
 
     model_input = st.session_state.typed_text
-    send_label = "Send Message 📤"
 
 # ==============================================================================
 # MODE 2: MULTI-USER (2-PERSON CONVERSATION)
 # ==============================================================================
 else:
-    ctrl_col1, ctrl_col2 = st.columns([2, 1])
+    ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 1.15, 0.95])
     with ctrl_col1:
         if st.session_state.get("active_speaker") not in ("User A", "User B"):
             st.session_state.active_speaker = "User A"
@@ -399,6 +453,8 @@ else:
         )
     with ctrl_col2:
         auto_switch = st.checkbox("Auto-switch turn", value=True)
+    with ctrl_col3:
+        st.button("Reset Chat", on_click=reset_chat_history)
 
     active_profile = st.session_state.active_speaker
     predictor.user_freq_cache = st.session_state.user_caches[active_profile]
@@ -423,6 +479,10 @@ else:
     render_live_keyboard_input(
         label=prompt_label,
         placeholder=f"Type {active_profile}'s message here...",
+        predictor=predictor,
+        active_profile=active_profile,
+        auto_switch=auto_switch,
+        send_tooltip=f"Send as {active_profile}",
     )
 
     # Condition predictions on recent chat turns + active user's current draft
@@ -438,10 +498,8 @@ else:
     else:
         model_input = draft
 
-    send_label = f"Send as {active_profile} 📤"
-
 # ==============================================================================
-# SHARED TOP-3 MOBILE KEYBOARD BAR + CONTEXTUAL PUNCTUATION & ACTIONS
+# SHARED TOP-3 MOBILE KEYBOARD BAR + CONTEXTUAL PUNCTUATION
 # ==============================================================================
 draft_for_spelling = st.session_state.typed_text
 if not draft_for_spelling:
@@ -540,20 +598,6 @@ with cols[3]:
         )
     else:
         st.button("—", key="empty_punct", disabled=True)
-
-action_col1, action_col2, action_col3 = st.columns([3, 1, 1])
-with action_col1:
-    st.button(
-        send_label,
-        type="primary",
-        on_click=send_current_message,
-        args=(predictor, active_profile, auto_switch),
-    )
-with action_col2:
-    st.button("Clear 🗑️", on_click=clear_input)
-with action_col3:
-    if st.session_state.app_mode == "Multi-User":
-        st.button("Reset Chat", on_click=reset_chat_history)
 
 # Adaptive User Cache Viewer (per active user profile)
 with st.expander(f"🧠 Adaptive Vocabulary Cache ({active_profile})"):
