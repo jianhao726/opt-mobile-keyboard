@@ -159,23 +159,12 @@ class OPTKeyboardPredictor:
                 key = w.lower()
                 self.user_freq_cache[key] = self.user_freq_cache.get(key, 0) + 1
 
-    def spelling_suggestion(self, text, context_before=""):
-        """Check the last completed word, preserving its exact character span."""
-        match = re.search(r"(?<![\w'’@/.-])([A-Za-z]+)([,.!?;:]*\s+)$", text)
-        if match is None:
-            return None
-
-        word = match.group(1)
-
-        # Skip words the user has already taught the keyboard via sent/accepted messages
-        if word.lower() in self.user_freq_cache:
-            return None
-
+    def _rank_word_candidates(self, word: str, prefix: str):
+        """Re-rank spelling candidates using batched OPT-125M contextual log-probabilities."""
         candidates = spelling_candidates(word)
         if not candidates:
-            return None
+            return []
 
-        prefix = context_before + text[:match.start(1)]
         has_prefix = bool(prefix.strip())
         base_left = (
             self.tokenizer.encode(prefix.rstrip(), add_special_tokens=False)
@@ -193,7 +182,6 @@ class OPTKeyboardPredictor:
             else (bos if bos is not None else 0)
         )
 
-        # Build padded batch so all candidates are scored in a single forward pass
         valid_candidates = []
         batch_seqs = []
         batch_spans = []
@@ -212,7 +200,7 @@ class OPTKeyboardPredictor:
             batch_spans.append((len(left), suffix))
 
         if not batch_seqs:
-            return None
+            return []
 
         max_len = max(len(seq) for seq in batch_seqs)
         padded_ids = [seq + [pad_id] * (max_len - len(seq)) for seq in batch_seqs]
@@ -238,13 +226,35 @@ class OPTKeyboardPredictor:
             ) / len(suffix)
             scored.append((candidate, score))
 
-        ranked = [cand for cand, _ in sorted(scored, key=lambda pair: -pair[1])]
-        return {
-            "word": word,
-            "start": match.start(1),
-            "end": match.end(1),
-            "candidates": ranked[:3],
-        }
+        return [cand for cand, _ in sorted(scored, key=lambda pair: -pair[1])][:3]
+
+    def spelling_suggestions(self, text, context_before=""):
+        """Check every completed word in the draft, preserving exact character spans."""
+        results = []
+        for match in re.finditer(r"(?<![\w'’@/.-])([A-Za-z]+)(?=[,.!?;:]*\s)", text):
+            word = match.group(1)
+
+            # Skip words the user has already taught the keyboard via sent/accepted messages
+            if word.lower() in self.user_freq_cache:
+                continue
+
+            prefix = context_before + text[:match.start(1)]
+            ranked = self._rank_word_candidates(word, prefix)
+            if ranked:
+                results.append(
+                    {
+                        "word": word,
+                        "start": match.start(1),
+                        "end": match.end(1),
+                        "candidates": ranked,
+                    }
+                )
+        return results
+
+    def spelling_suggestion(self, text, context_before=""):
+        """Backwards-compatible helper returning the latest completed misspelling."""
+        suggestions = self.spelling_suggestions(text, context_before)
+        return suggestions[-1] if suggestions else None
 
     def clear_user_cache(self):
         self.user_freq_cache.clear()
