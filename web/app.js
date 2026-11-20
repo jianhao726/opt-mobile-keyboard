@@ -28,6 +28,92 @@
     let busy = false;
     let queued = false;
     let modelHasResponded = false;
+    let preview = null;
+    let lastCorrection = null;
+    let pendingSpelling = null;
+    const keyTimers = new WeakMap();
+    // Only rewrite familiar misspellings automatically. Ambiguous words use the spelling chips.
+    const commonTypos = new Map(Object.entries({
+      teh: "the", hte: "the", adn: "and", thsi: "this", taht: "that", thier: "their",
+      wiht: "with", wtih: "with", woudl: "would", coudl: "could", shoudl: "should",
+      becuase: "because", becasue: "because", recieve: "receive", recieved: "received",
+      tommorow: "tomorrow", tommorrow: "tomorrow", freind: "friend", remeber: "remember",
+      langauge: "language", mesage: "message", keybaord: "keyboard", helllo: "hello",
+      defintely: "definitely", definately: "definitely", almsot: "almost", abotu: "about",
+    }));
+
+    function refreshCorrectionNote() {
+      if (lastCorrection && !input.value.startsWith(lastCorrection.prefix + lastCorrection.to)) lastCorrection = null;
+      el("autocorrect-note").hidden = !lastCorrection;
+    }
+
+    function correctCompletedWord(boundary) {
+      pendingSpelling = null;
+      if (!el("autocorrect").checked) return;
+      const left = input.value.slice(0, boundary);
+      const match = /(?:^|\s)([a-z]+)$/i.exec(left);
+      if (!match) return;
+      const from = match[1];
+      const lower = from.toLowerCase();
+      let to = commonTypos.get(lower);
+      const start = Array.from(left).length - from.length;
+      if (profile().cache.has(lower) || profile().dismissed.has(signature(from, start))) return;
+      if (!to) {
+        // Let the existing contextual spellchecker handle other completed words.
+        if (!examples && el("spelling").checked && from === lower) {
+          pendingSpelling = { left, word: from, start };
+        }
+        return;
+      }
+      if (from === from.toUpperCase()) to = to.toUpperCase();
+      else if (from === from[0].toUpperCase() + lower.slice(1)) to = to[0].toUpperCase() + to.slice(1);
+      else if (from !== lower) return;
+      replaceTypo(left, from, to);
+    }
+
+    function replaceTypo(left, from, to) {
+      if (input.value.length + to.length - from.length > input.maxLength) return false;
+      const boundary = left.length;
+      const start = boundary - from.length;
+      input.setRangeText(to, start, boundary, "preserve");
+      lastCorrection = { from, to, prefix: left.slice(0, start) };
+      el("autocorrect-message").textContent = "Corrected “" + from + "” to “" + to + "”.";
+      return true;
+    }
+
+    function correctAtSeparator(inserted) {
+      if (/^[\s.,!?;:]$/u.test(inserted || "")) correctCompletedWord(input.selectionStart - 1);
+    }
+
+    function renderPreview() {
+      const draft = input.value;
+      const atEnd = input.selectionStart === draft.length && input.selectionEnd === draft.length;
+      let suffix = "";
+      if (preview && draft && atEnd) {
+        if (preview.mode === "Prefix-Completion") {
+          const prefix = draft.match(/\S+$/u)?.[0] || "";
+          if (prefix && preview.word.toLowerCase().startsWith(prefix.toLowerCase())) suffix = preview.word.slice(prefix.length);
+        } else if (preview.mode === "Next-Word") suffix = preview.word;
+      }
+      el("draft-preview").hidden = el("preview-hint").hidden = !suffix;
+      el("preview-prefix").textContent = suffix ? draft : "";
+      el("preview-tail").textContent = suffix;
+      el("draft-preview").scrollLeft = input.scrollLeft;
+    }
+
+    function lightKey(key, glyph) {
+      const node = Array.from(el("keyboard").querySelectorAll(".key")).find(item => item.dataset.key === key);
+      if (!node) return;
+      clearTimeout(keyTimers.get(node));
+      if (glyph?.length === 1 && glyph.trim()) node.dataset.glyph = glyph;
+      node.classList.remove("key-lit");
+      void node.offsetWidth;
+      node.classList.add("key-lit");
+      keyTimers.set(node, setTimeout(() => {
+        node.classList.remove("key-lit");
+        delete node.dataset.glyph;
+      }, 185));
+    }
 
     const profileName = () => mode === "solo" ? "Solo" : el("speaker").value;
     const profile = () => profiles[profileName()];
@@ -64,6 +150,7 @@
 
     function setDraft(value, caret) {
       input.value = value;
+      refreshCorrectionNote();
       profile().draft = value;
       el("send").disabled = !value.trim();
       if (mode === "chat") {
@@ -121,6 +208,7 @@
     }
 
     function send() {
+      correctCompletedWord(input.value.length);
       const text = input.value.trim();
       if (!text) return;
       const sender = profileName();
@@ -128,6 +216,7 @@
       learn(text);
       profile().draft = "";
       profile().dismissed.clear();
+      pendingSpelling = lastCorrection = null;
       if (mode === "chat" && el("auto-switch").checked) {
         el("speaker").value = sender === "User A" ? "User B" : "User A";
       }
@@ -138,6 +227,7 @@
     }
 
     function loadPrompt(entry) {
+      pendingSpelling = lastCorrection = null;
       if (mode === "chat") {
         logs.chat = [{ sender: "User A", text: entry[1] }];
         for (const name of ["User A", "User B"]) {
@@ -156,6 +246,7 @@
     }
 
     function renderMode() {
+      pendingSpelling = lastCorrection = null;
       el("mode-solo").setAttribute("aria-pressed", String(mode === "solo"));
       el("mode-chat").setAttribute("aria-pressed", String(mode === "chat"));
       el("chat-controls").hidden = mode !== "chat";
@@ -264,6 +355,18 @@
     }
 
     function showPrediction(result) {
+      const pending = pendingSpelling;
+      pendingSpelling = null;
+      if (pending && el("autocorrect").checked && input.value.startsWith(pending.left)) {
+        const correction = result.corrections.find(c => c.start === pending.start && c.word === pending.word);
+        if (correction?.candidates.length === 1 && !profile().dismissed.has(signature(pending.word, pending.start)) &&
+            replaceTypo(pending.left, pending.word, correction.candidates[0])) {
+          setDraft(input.value);
+          return;
+        }
+      }
+      preview = result.suggestions.length ? { word: result.suggestions[0].word, mode: result.mode } : null;
+      renderPreview();
       status(examples ? "Example preview" : "Model ready", examples ? "preview" : "ready");
       el("latency").textContent = examples ? "—" : Number(result.latencyMs).toFixed(1) + " ms";
       el("footprint").textContent = examples ? "—" : result.footprint;
@@ -345,6 +448,8 @@
     }
 
     function schedulePrediction(delay = 160) {
+      preview = null;
+      renderPreview();
       const version = ++predictionVersion;
       clearTimeout(timer);
       queued = false;
@@ -393,9 +498,9 @@
       }
       if (input.value.length - (end - start) + insert.length > input.maxLength) return;
       input.setRangeText(insert, start, end, "end");
+      correctAtSeparator(insert);
       if (shifted && insert) { shifted = false; drawKeyboard(); }
       setDraft(input.value);
-      input.setSelectionRange(start + insert.length, start + insert.length);
     }
 
     const settings = el("settings-dialog");
@@ -433,18 +538,49 @@
     });
     el("reset-cache").addEventListener("click", () => { profile().cache.clear(); renderVocabulary(); schedulePrediction(); });
     input.maxLength = 2048;
-    input.addEventListener("input", () => {
+    el("undo-autocorrect").addEventListener("click", () => {
+      if (!lastCorrection) return;
+      const { prefix, from, to } = lastCorrection;
+      input.setRangeText(from, prefix.length, prefix.length + to.length, "preserve");
+      profile().dismissed.add(signature(from, Array.from(prefix).length));
+      lastCorrection = null;
+      setDraft(input.value, input.selectionEnd);
+    });
+    input.addEventListener("scroll", renderPreview);
+    document.addEventListener("selectionchange", renderPreview);
+    input.addEventListener("input", (event) => {
+      if (!event.isComposing && event.inputType === "insertText") correctAtSeparator(event.data);
       setDraft(input.value);
       el("send-status").textContent = "";
     });
     input.addEventListener("keydown", (event) => {
+      if (event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.key === "ArrowRight" && !event.shiftKey && preview && !el("draft-preview").hidden &&
+          input.selectionStart === input.value.length && input.selectionEnd === input.value.length) {
+        event.preventDefault();
+        chooseWord(preview.word, preview.mode, false);
+        return;
+      }
+      const key = event.key === " " ? "Space" : event.key.length === 1 ? event.key.toLowerCase() : event.key;
+      const symbol = key.length === 1 && /^[0-9@#$%&*+()!?'"\/:;-]$/.test(key);
+      if ((symbol && !numbers) || (numbers && /^[a-z]$/.test(key))) {
+        numbers = symbol;
+        drawKeyboard();
+      }
+      lightKey(key, event.key);
       if (event.key === "Enter" && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); send(); }
     });
     el("send").addEventListener("click", send);
     el("keyboard").addEventListener("pointerdown", (event) => { if (event.target.closest("[data-key]")) event.preventDefault(); });
     el("keyboard").addEventListener("click", (event) => {
       const key = event.target.closest("button[data-key]");
-      if (key) pressKey(key.dataset.key);
+      if (key) {
+        const value = key.dataset.key;
+        const glyph = value.length === 1 ? key.textContent : "";
+        if (matchMedia("(pointer: fine)").matches) input.focus({ preventScroll: true });
+        pressKey(value);
+        lightKey(value, glyph);
+      }
     });
     el("boost").addEventListener("input", () => {
       el("boost-value").textContent = Number(el("boost").value).toFixed(2);

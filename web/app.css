@@ -77,6 +77,19 @@ input[type="checkbox"],input[type="range"] { accent-color: #567a3c; }
 .draft-box:focus-within { border-color: #78965c; box-shadow: 0 0 0 3px #a6cd762d; }
 #draft { width: 100%; min-width: 0; padding: 8px 0; outline: none; border: 0; background: transparent; font-size: 17px; line-height: 1.3; }
 #draft::placeholder { color: #778274; }
+.draft-entry { position: relative; flex: 1; min-width: 0; font-size: 17px; }
+.draft-entry #draft { display: block; font: inherit; line-height: 1.3; }
+#draft-preview { position: absolute; inset: 0; display: flex; align-items: center; white-space: pre; overflow: hidden; pointer-events: none; font: inherit; line-height: 1.3; color: #657c61; }
+#draft-preview span { flex: none; }
+#preview-prefix { visibility: hidden; }
+#preview-hint,#autocorrect-note { display: block; font-size: 12px; margin-top: 7px; color: #53674e; }
+.preview-help { min-height: 21px; display: flow-root; }
+.key.key-lit { position: relative; z-index: 1; background: #c8e8ac; border-color: #8da37f; box-shadow: 0 1px 0 #8da37f; }
+.key.key-lit[data-glyph]::after { position: absolute; content: attr(data-glyph); left: 50%; bottom: 95%; transform: translateX(-50%); min-width: 1.6em; padding: 4px; background: var(--deep); color: white; border-radius: 6px; pointer-events: none; font: 600 18px/1.25 var(--sans); }
+@media (prefers-reduced-motion:no-preference) {
+  .key.key-lit { animation: keystroke .19s ease-out; }
+  @keyframes keystroke { 0% { transform: translateY(2px) scale(.96); } 100% { transform: none; } }
+}
 #send { display: grid; place-items: center; background: var(--deep); color: #fff; border: 0; border-radius: 8px; width: 35px; height: 35px; flex: none; }
 #send:hover:not(:disabled) { background: #405e3c; }
 #send:disabled { background: #4e6450; }

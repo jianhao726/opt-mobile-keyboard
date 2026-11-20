@@ -64,10 +64,15 @@
           <div class="draft-block">
             <label class="field-label" for="draft">Your message</label>
             <div class="draft-box">
-              <input id="draft" type="text" maxlength="2048" autocomplete="off" autocapitalize="sentences" spellcheck="false" placeholder="Start typing here…" aria-label="Your message">
+              <div class="draft-entry">
+                <input id="draft" type="text" maxlength="2048" autocomplete="off" autocorrect="off" autocapitalize="sentences" spellcheck="false" placeholder="Start typing here…" aria-label="Your message" aria-describedby="preview-hint">
+                <div id="draft-preview" aria-hidden="true" hidden><span id="preview-prefix"></span><span id="preview-tail"></span></div>
+              </div>
               <button id="send" type="button" title="Send message" aria-label="Send message"><svg class="icon"><use href="#i-send"/></svg></button>
             </div>
             <div class="send-line"><span id="send-status" role="status"></span></div>
+            <div class="preview-help"><small id="preview-hint" hidden>Press → or tap the first suggestion to accept.</small></div>
+            <div id="autocorrect-note" hidden><span id="autocorrect-message" role="status"></span> <button id="undo-autocorrect" type="button" class="text-button">Undo</button></div>
           </div>
           <div id="corrections" aria-live="polite"></div>
           <div class="predict-head"><span class="field-label"><svg class="icon"><use href="#i-spark"/></svg>Suggestions</span><span id="prediction-mode">Starter</span></div>
@@ -103,6 +108,7 @@
       <div class="footprint">Model footprint <span id="footprint">—</span></div>
       <label class="setting" for="boost"><span>Personalization boost <output id="boost-value" for="boost">0.35</output></span><input id="boost" type="range" min="0" max="1" step="0.05" value="0.35"><small>Give words you use often a higher rank.</small></label>
       <label class="switch-line"><span>Spelling suggestions</span><input id="spelling" type="checkbox" checked></label>
+      <label class="switch-line"><span>Autocorrect common typos</span><input id="autocorrect" type="checkbox" checked></label>
       <div class="vocab-head"><h3>Adaptive vocabulary</h3><button id="reset-cache" class="text-button" type="button">Reset cache</button></div>
       <ul id="vocabulary" aria-label="Active profile’s learned words"></ul>
     </div>
