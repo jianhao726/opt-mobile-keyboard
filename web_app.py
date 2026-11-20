@@ -174,17 +174,27 @@ class KeyboardHandler(BaseHTTPRequestHandler):
         else:
             self.reply_json(HTTPStatus.OK, result)
 
+        def do_HEAD(self):
+    self.send_response(200)
+    self.send_header("Content-Type", "text/html; charset=utf-8")
+    self.end_headers()
 
 def main():
-    on_render = os.environ.get("RENDER") == "true"
+    on_render = (
+        os.environ.get("RENDER", "").lower() == "true"
+        or "PORT" in os.environ
+    )
     host = "0.0.0.0" if on_render else "127.0.0.1"
-    default_port = os.environ.get("PORT", "10000") if on_render else 8765
+    default_port = int(os.environ.get("PORT", 10000)) if on_render else 8765
+
     parser = argparse.ArgumentParser(description="Run the HTML keyboard and prediction API.")
+    parser.add_argument("--host", default=host, help="Override the listening host")
     parser.add_argument("--port", type=int, default=default_port, help="Override the listening port")
     args = parser.parse_args()
+
     os.chdir(ROOT)  # The original predictor resolves its LoRA adapter from the working directory.
-    with ThreadingHTTPServer((host, args.port), KeyboardHandler) as server:
-        print(f"Keyboard Lab is running at http://{host}:{server.server_port}", flush=True)
+    with ThreadingHTTPServer((args.host, args.port), KeyboardHandler) as server:
+        print(f"Keyboard Lab is running at http://{args.host}:{server.server_port}", flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
