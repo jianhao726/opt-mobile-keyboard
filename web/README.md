@@ -14,3 +14,15 @@ Type into the composer or load a sample prompt. Select a suggestion to complete 
 For a quick design preview, open `web/index.html` directly in a browser. It uses a small example word list. The Python server provides model predictions, confidence scores, and spelling corrections.
 
 To launch the original Streamlit interface, use `streamlit run app.py` from the repository root.
+
+## Render deployment
+
+Use a Python **Web Service** for the HTML interface and its prediction API. Set the branch to `codex/html-keyboard` and leave **Root Directory** empty.
+
+| Setting | Value |
+| --- | --- |
+| Build Command | `python -m pip install torch --index-url https://download.pytorch.org/whl/cpu && python -m pip install -r requirements.txt` |
+| Start Command | `python web_app.py` |
+| Health Check Path | `/` |
+
+After deploying, open the service's public URL at `/`. The server reads Render's assigned port and serves the keyboard there. Its startup log includes `Keyboard Lab is running at http://0.0.0.0:` followed by the port. The first prediction loads the model after the page opens.
