@@ -174,10 +174,10 @@ class KeyboardHandler(BaseHTTPRequestHandler):
         else:
             self.reply_json(HTTPStatus.OK, result)
 
-        def do_HEAD(self):
-    self.send_response(200)
-    self.send_header("Content-Type", "text/html; charset=utf-8")
-    self.end_headers()
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
 
 def main():
     on_render = (
