@@ -59,8 +59,8 @@ def load_predictor(variant: str) -> OPTKeyboardPredictor:
 
 
 # --- Session State Initialization ---
-if "dismissed_spelling" not in st.session_state:
-    st.session_state.dismissed_spelling = None
+if "dismissed_spellings" not in st.session_state:
+    st.session_state.dismissed_spellings = set()
 if "app_mode" not in st.session_state:
     st.session_state.app_mode = "Single-User"
 if "typed_text" not in st.session_state:
@@ -117,6 +117,7 @@ def confirm_suggestion(
 
 def set_sample_prompt(prompt_text: str):
     st.session_state.typed_text = prompt_text
+    st.session_state.dismissed_spellings.clear()
     request_input_focus()
 
 
@@ -124,6 +125,7 @@ def start_two_user_scenario(opening_msg: str, reply_prefix: str = ""):
     st.session_state.chat_history = [{"sender": "User A", "text": opening_msg}]
     st.session_state.active_speaker = "User B"
     st.session_state.typed_text = reply_prefix
+    st.session_state.dismissed_spellings.clear()
     request_input_focus()
 
 
@@ -139,17 +141,30 @@ def accept_correction(
         st.session_state.typed_text = original[:start] + replacement + original[end:]
         predictor.user_freq_cache = st.session_state.user_caches[active_profile]
         predictor.update_user_cache(replacement)
-    st.session_state.dismissed_spelling = None
+
+        # Keep character offsets aligned for any previously dismissed words after this edit
+        delta = len(replacement) - (end - start)
+        updated_dismissed = set()
+        for mode_name, prof_name, dismissed_word, dismissed_start in st.session_state.dismissed_spellings:
+            if mode_name == st.session_state.app_mode and prof_name == active_profile:
+                if dismissed_start == start:
+                    continue
+                if dismissed_start > start:
+                    dismissed_start += delta
+            updated_dismissed.add((mode_name, prof_name, dismissed_word, dismissed_start))
+        st.session_state.dismissed_spellings = updated_dismissed
+
     request_input_focus()
 
 
 def dismiss_correction(signature):
-    st.session_state.dismissed_spelling = signature
+    st.session_state.dismissed_spellings.add(signature)
     request_input_focus()
 
 
 def clear_input():
     st.session_state.typed_text = ""
+    st.session_state.dismissed_spellings.clear()
     request_input_focus()
 
 
@@ -174,6 +189,7 @@ def send_current_message(
                 "User B" if active_profile == "User A" else "User A"
             )
     st.session_state.typed_text = ""
+    st.session_state.dismissed_spellings.clear()
     request_input_focus()
 
 
@@ -182,6 +198,7 @@ def reset_chat_history():
     st.session_state.chat_history = []
     st.session_state.active_speaker = "User A"
     st.session_state.typed_text = ""
+    st.session_state.dismissed_spellings.clear()
     request_input_focus()
 
 
@@ -329,6 +346,7 @@ new_mode = (
 if new_mode != st.session_state.app_mode:
     st.session_state.app_mode = new_mode
     st.session_state.typed_text = ""
+    st.session_state.dismissed_spellings.clear()
     if new_mode == "Multi-User" and not st.session_state.chat_history:
         st.session_state.active_speaker = "User A"
     request_input_focus()
@@ -420,19 +438,28 @@ else:
 # ==============================================================================
 # SHARED TOP-3 MOBILE KEYBOARD BAR & ACTIONS
 # ==============================================================================
-# Correction is offered only after a word is completed with whitespace.
+# Corrections are offered for all completed words (followed by whitespace) in the draft.
 draft_for_spelling = st.session_state.typed_text
-signature = (st.session_state.app_mode, active_profile, draft_for_spelling)
 if not draft_for_spelling:
-    st.session_state.dismissed_spelling = None
-if spelling_enabled and signature != st.session_state.dismissed_spelling:
+    st.session_state.dismissed_spellings.clear()
+
+if spelling_enabled and draft_for_spelling:
     preceding_context = ""
     if st.session_state.app_mode == "Multi-User" and st.session_state.chat_history:
         preceding_context = (
             " ".join(m["text"] for m in st.session_state.chat_history[-2:]) + " "
         )
-    correction = predictor.spelling_suggestion(draft_for_spelling, preceding_context)
-    if correction:
+    corrections = predictor.spelling_suggestions(draft_for_spelling, preceding_context)
+    for correction in corrections:
+        word_sig = (
+            st.session_state.app_mode,
+            active_profile,
+            correction["word"].lower(),
+            correction["start"],
+        )
+        if word_sig in st.session_state.dismissed_spellings:
+            continue
+
         choices = correction["candidates"]
         st.info(f'Did you mean "{choices[0]}" instead of "{correction["word"]}"?')
         correction_cols = st.columns(len(choices) + 1)
@@ -441,7 +468,7 @@ if spelling_enabled and signature != st.session_state.dismissed_spelling:
                 label = f"Yes — {choice}" if index == 0 else choice
                 st.button(
                     label,
-                    key=f"correction_{index}_{choice}",
+                    key=f"correction_{correction['start']}_{index}_{choice}",
                     on_click=accept_correction,
                     args=(
                         predictor,
@@ -455,9 +482,9 @@ if spelling_enabled and signature != st.session_state.dismissed_spelling:
         with correction_cols[-1]:
             st.button(
                 "No — keep original",
-                key=f"dismiss_spelling_{correction['word']}_{correction['start']}",
+                key=f"dismiss_spelling_{correction['start']}_{correction['word']}",
                 on_click=dismiss_correction,
-                args=(signature,),
+                args=(word_sig,),
             )
 
 suggestions, latency_ms, mode = predictor.suggest(
