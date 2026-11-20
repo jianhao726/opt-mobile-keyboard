@@ -1,6 +1,9 @@
 import gc
 import math
 import os
+import re
+from functools import lru_cache
+from spellchecker import SpellChecker
 import time
 import torch
 from peft import PeftModel
@@ -27,6 +30,31 @@ VARIANT_METADATA = {
         "size_label": "500.8 MB (FP32)",
     },
 }
+
+
+@lru_cache(maxsize=1)
+def english_spellchecker():
+    return SpellChecker(language="en", distance=1)
+
+
+def spelling_candidates(word, limit=5):
+    """Suggest edits for unknown English words without changing user text."""
+    if not word.isascii() or not word.isalpha() or not 3 <= len(word) <= 24:
+        return []
+    spell = english_spellchecker()
+    lower = word.lower()
+    if spell.known([lower]):
+        return []
+    candidates = spell.candidates(lower) or set()
+    ranked = sorted(
+        (w for w in candidates if w != lower and w not in PROFANITY_BLOCKLIST),
+        key=lambda w: (-spell.word_usage_frequency(w), w),
+    )[:limit]
+    if word.isupper():
+        return [w.upper() for w in ranked]
+    if word.istitle():
+        return [w.capitalize() for w in ranked]
+    return ranked
 
 
 class OPTKeyboardPredictor:
@@ -127,6 +155,93 @@ class OPTKeyboardPredictor:
             if w.isalpha() and len(w) > 1:
                 key = w.lower()
                 self.user_freq_cache[key] = self.user_freq_cache.get(key, 0) + 1
+
+    def spelling_suggestion(self, text, context_before=""):
+        """Check the last completed word, preserving its exact character span."""
+        match = re.search(r"(?<![\w'’@/.-])([A-Za-z]+)([,.!?;:]*\s+)$", text)
+        if match is None:
+            return None
+
+        word = match.group(1)
+
+        # Skip words the user has already taught the keyboard via sent/accepted messages
+        if word.lower() in self.user_freq_cache:
+            return None
+
+        candidates = spelling_candidates(word)
+        if not candidates:
+            return None
+
+        prefix = context_before + text[:match.start(1)]
+        has_prefix = bool(prefix.strip())
+        base_left = (
+            self.tokenizer.encode(prefix.rstrip(), add_special_tokens=False)
+            if has_prefix
+            else []
+        )
+        bos = (
+            self.tokenizer.bos_token_id
+            if self.tokenizer.bos_token_id is not None
+            else self.tokenizer.eos_token_id
+        )
+        pad_id = (
+            self.tokenizer.pad_token_id
+            if self.tokenizer.pad_token_id is not None
+            else (bos if bos is not None else 0)
+        )
+
+        # Build padded batch so all candidates are scored in a single forward pass
+        valid_candidates = []
+        batch_seqs = []
+        batch_spans = []
+
+        for candidate in candidates:
+            suffix = self.tokenizer.encode(
+                " " + candidate if has_prefix else candidate,
+                add_special_tokens=False,
+            )
+            if not suffix:
+                continue
+            left = base_left[-max(1, 127 - len(suffix)):] if base_left else [bos]
+            seq = left + suffix
+            valid_candidates.append(candidate)
+            batch_seqs.append(seq)
+            batch_spans.append((len(left), suffix))
+
+        if not batch_seqs:
+            return None
+
+        max_len = max(len(seq) for seq in batch_seqs)
+        padded_ids = [seq + [pad_id] * (max_len - len(seq)) for seq in batch_seqs]
+        attn_masks = [[1] * len(seq) + [0] * (max_len - len(seq)) for seq in batch_seqs]
+
+        input_ids = torch.tensor(padded_ids, dtype=torch.long, device=self.device)
+        attention_mask = torch.tensor(attn_masks, dtype=torch.long, device=self.device)
+
+        with torch.no_grad():
+            logits = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            ).logits.float()
+            scores = torch.log_softmax(logits, dim=-1)
+
+        scored = []
+        for idx, (candidate, (left_len, suffix)) in enumerate(
+            zip(valid_candidates, batch_spans)
+        ):
+            score = sum(
+                scores[idx, left_len + i - 1, tid].item()
+                for i, tid in enumerate(suffix)
+            ) / len(suffix)
+            scored.append((candidate, score))
+
+        ranked = [cand for cand, _ in sorted(scored, key=lambda pair: -pair[1])]
+        return {
+            "word": word,
+            "start": match.start(1),
+            "end": match.end(1),
+            "candidates": ranked[:3],
+        }
 
     def clear_user_cache(self):
         self.user_freq_cache.clear()
