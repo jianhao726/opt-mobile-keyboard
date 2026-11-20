@@ -63,7 +63,7 @@ if "solo_messages" not in st.session_state:
     st.session_state.solo_messages = []
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-if "active_speaker" not in st.session_state:
+if st.session_state.get("active_speaker") not in ("User A", "User B"):
     st.session_state.active_speaker = "User A"
 if "user_caches" not in st.session_state:
     st.session_state.user_caches = {
@@ -79,13 +79,26 @@ def apply_suggestion(word: str, mode: str):
     if mode == "Starter" or not current.strip():
         st.session_state.typed_text = f"{word} "
     elif mode == "Next-Word":
-        st.session_state.typed_text = f"{current}{word} "
+        sep = "" if current.endswith((" ", "\t", "\n")) else " "
+        st.session_state.typed_text = f"{current}{sep}{word} "
     else:
         if " " in current:
             prefix_ctx, _ = current.rsplit(" ", 1)
             st.session_state.typed_text = f"{prefix_ctx} {word} "
         else:
             st.session_state.typed_text = f"{word} "
+
+
+def confirm_suggestion(
+    predictor: OPTKeyboardPredictor,
+    active_profile: str,
+    word: str,
+    mode: str,
+):
+    """Applies the chosen word and updates the active user's personal cache."""
+    apply_suggestion(word, mode)
+    predictor.user_freq_cache = st.session_state.user_caches[active_profile]
+    predictor.update_user_cache(word)
 
 
 def set_sample_prompt(prompt_text: str):
@@ -121,7 +134,11 @@ def clear_input():
     st.session_state.typed_text = ""
 
 
-def send_current_message(predictor: OPTKeyboardPredictor, active_profile: str, auto_switch: bool = True):
+def send_current_message(
+    predictor: OPTKeyboardPredictor,
+    active_profile: str,
+    auto_switch: bool = True,
+):
     """Callback executed before widget instantiation so clearing typed_text is safe."""
     msg = st.session_state.typed_text.strip()
     if not msg:
@@ -133,7 +150,9 @@ def send_current_message(predictor: OPTKeyboardPredictor, active_profile: str, a
     else:
         st.session_state.chat_history.append({"sender": active_profile, "text": msg})
         if auto_switch:
-            st.session_state.active_speaker = "User B" if active_profile == "User A" else "User A"
+            st.session_state.active_speaker = (
+                "User B" if active_profile == "User A" else "User A"
+            )
     st.session_state.typed_text = ""
 
 
@@ -145,7 +164,7 @@ def reset_chat_history():
 
 
 def render_live_keyboard_input(label: str, placeholder: str):
-    """Single-line input with real-time keystroke updates (no Ctrl+Enter needed)."""
+    """Single-line input with real-time keystroke updates when supported."""
     supports_live = "live" in inspect.signature(st.text_input).parameters
     kwargs = {
         "key": "typed_text",
@@ -205,8 +224,16 @@ with st.sidebar:
         st.subheader("💬 Optional Quick Scenarios")
         scenarios = [
             ("Lunch Invite", "Hey! Are you free for lunch today?", ""),
-            ("Phone Battery", "My phone battery is at 1%, do you have a charger?", "Yes, I have a "),
-            ("Train Meetup", "I just arrived at the station, where are you?", "I am on my "),
+            (
+                "Phone Battery",
+                "My phone battery is at 1%, do you have a charger?",
+                "Yes, I have a ",
+            ),
+            (
+                "Train Meetup",
+                "I just arrived at the station, where are you?",
+                "I am on my ",
+            ),
         ]
         for idx, (label, msg_a, draft_b) in enumerate(scenarios):
             st.button(
@@ -225,7 +252,11 @@ st.caption(
     "BMDS2123 Natural Language Processing • `facebook/opt-125m` + LoRA + Hybrid Prefix-Aware Decoding"
 )
 
-current_label = "Single-User" if st.session_state.app_mode == "Single-User" else "Multi-User (2-Person Chat)"
+current_label = (
+    "Single-User"
+    if st.session_state.app_mode == "Single-User"
+    else "Multi-User (2-Person Chat)"
+)
 mode_choice = st.segmented_control(
     "Select Interaction Mode",
     options=["Single-User", "Multi-User (2-Person Chat)"],
@@ -235,7 +266,11 @@ mode_choice = st.segmented_control(
 if mode_choice is None:
     mode_choice = current_label
 
-new_mode = "Multi-User" if mode_choice == "Multi-User (2-Person Chat)" else "Single-User"
+new_mode = (
+    "Multi-User"
+    if mode_choice == "Multi-User (2-Person Chat)"
+    else "Single-User"
+)
 if new_mode != st.session_state.app_mode:
     st.session_state.app_mode = new_mode
     st.session_state.typed_text = ""
@@ -274,14 +309,14 @@ if st.session_state.app_mode == "Single-User":
 else:
     ctrl_col1, ctrl_col2 = st.columns([2, 1])
     with ctrl_col1:
-        speaker = st.segmented_control(
+        if st.session_state.get("active_speaker") not in ("User A", "User B"):
+            st.session_state.active_speaker = "User A"
+        st.segmented_control(
             "Active Typist",
             options=["User A", "User B"],
-            default=st.session_state.active_speaker,
+            key="active_speaker",
             selection_mode="single",
         )
-        if speaker:
-            st.session_state.active_speaker = speaker
     with ctrl_col2:
         auto_switch = st.checkbox("Auto-switch turn", value=True)
 
@@ -313,7 +348,9 @@ else:
     # Condition predictions on recent chat turns + active user's current draft
     draft = st.session_state.typed_text
     if st.session_state.chat_history:
-        recent_turns = " ".join(m["text"].strip() for m in st.session_state.chat_history[-2:])
+        recent_turns = " ".join(
+            m["text"].strip() for m in st.session_state.chat_history[-2:]
+        )
         if not draft.strip():
             model_input = f"{recent_turns} "
         else:
@@ -334,7 +371,9 @@ if not draft_for_spelling:
 if spelling_enabled and signature != st.session_state.dismissed_spelling:
     preceding_context = ""
     if st.session_state.app_mode == "Multi-User" and st.session_state.chat_history:
-        preceding_context = " ".join(m["text"] for m in st.session_state.chat_history[-2:]) + " "
+        preceding_context = (
+            " ".join(m["text"] for m in st.session_state.chat_history[-2:]) + " "
+        )
     correction = predictor.spelling_suggestion(draft_for_spelling, preceding_context)
     if correction:
         choices = correction["candidates"]
@@ -383,10 +422,8 @@ for i in range(3):
             st.button(
                 f"{word}  ({prob * 100:.0f}%)",
                 key=f"sugg_{active_profile}_{i}_{word}",
-                on_click=lambda w=word, m=mode: (
-                    apply_suggestion(w, m),
-                    predictor.update_user_cache(w),
-                ),
+                on_click=confirm_suggestion,
+                args=(predictor, active_profile, word, mode),
             )
         else:
             st.button("—", key=f"empty_{i}", disabled=True)
@@ -415,4 +452,6 @@ with st.expander(f"🧠 Adaptive Vocabulary Cache ({active_profile})"):
             st.session_state.user_caches[active_profile].clear()
             st.rerun()
     else:
-        st.info(f"Tap suggested words or send messages as {active_profile} to build their personal word frequency cache.")
+        st.info(
+            f"Tap suggested words or send messages as {active_profile} to build their personal word frequency cache."
+        )
