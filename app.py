@@ -441,9 +441,8 @@ else:
     send_label = f"Send as {active_profile} 📤"
 
 # ==============================================================================
-# SHARED TOP-3 MOBILE KEYBOARD BAR & ACTIONS
+# SHARED TOP-3 MOBILE KEYBOARD BAR + CONTEXTUAL PUNCTUATION & ACTIONS
 # ==============================================================================
-# Corrections are offered for all completed words (followed by whitespace) in the draft.
 draft_for_spelling = st.session_state.typed_text
 if not draft_for_spelling:
     st.session_state.dismissed_spellings.clear()
@@ -504,12 +503,19 @@ suggestions, latency_ms, mode = predictor.suggest(
     cache_weight=cache_weight,
 )
 
+punct_suggestion = None
+if (
+    st.session_state.typed_text.strip()
+    and hasattr(predictor, "suggest_punctuation")
+):
+    punct_suggestion = predictor.suggest_punctuation(model_input)
+
 st.markdown(
     f"<div class='keyboard-hint'>Profile: <b>{active_profile}</b> • Mode: <b>{mode}</b> • Latency: <b>{latency_ms:.1f} ms</b> • Footprint: <b>{predictor.variant_info.get('size_label', '')}</b></div>",
     unsafe_allow_html=True,
 )
 
-cols = st.columns(3)
+cols = st.columns([1, 1, 1, 0.75])
 for i in range(3):
     with cols[i]:
         if i < len(suggestions):
@@ -522,6 +528,18 @@ for i in range(3):
             )
         else:
             st.button("—", key=f"empty_{i}", disabled=True)
+
+with cols[3]:
+    if punct_suggestion is not None:
+        sym, sym_prob = punct_suggestion
+        st.button(
+            f"{sym}  ({sym_prob * 100:.0f}%)",
+            key=f"punct_{active_profile}_{sym}",
+            on_click=confirm_suggestion,
+            args=(predictor, active_profile, sym, mode),
+        )
+    else:
+        st.button("—", key="empty_punct", disabled=True)
 
 action_col1, action_col2, action_col3 = st.columns([3, 1, 1])
 with action_col1:
