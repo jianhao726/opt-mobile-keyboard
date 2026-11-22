@@ -1,0 +1,54 @@
+name: Publish browser keyboard
+
+on:
+  push:
+    branches: [codex/browser-inference]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keyform-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: browser/package-lock.json
+      - name: Install export tools
+        run: |
+          python -m pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r browser/requirements-export.txt
+          npm ci --prefix browser
+      - name: Export and validate the fine-tuned model
+        run: python browser/export_model.py browser/site/assets
+      - name: Assemble the site
+        run: npm run build --prefix browser
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: browser/site
+          retention-days: 7
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+      - uses: actions/deploy-pages@v4
+        id: deploy

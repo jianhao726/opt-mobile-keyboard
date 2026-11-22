@@ -5,6 +5,8 @@
     const el = (id) => document.getElementById(id);
     const input = el("draft");
     const examples = location.protocol === "file:" || document.body.dataset.preview === "true";
+    const browserModel = !examples && document.body.dataset.predictions === "browser";
+    const modelDownload = document.body.dataset.modelSize + " MB";
     const soloPrompts = [
       ["Low battery", "My phone battery is at 1%, do you have a "],
       ["Train meetup", "Sure, I will meet you at the train "],
@@ -28,6 +30,7 @@
     let busy = false;
     let queued = false;
     let modelHasResponded = false;
+    let browserWorker;
     let preview = null;
     let lastCorrection = null;
     let pendingSpelling = null;
@@ -367,9 +370,9 @@
       }
       preview = result.suggestions.length ? { word: result.suggestions[0].word, mode: result.mode } : null;
       renderPreview();
-      status(examples ? "Example preview" : "Model ready", examples ? "preview" : "ready");
+      status(examples ? "Example preview" : browserModel ? "Running on this device" : "Model ready", examples ? "preview" : "ready");
       el("latency").textContent = examples ? "—" : Number(result.latencyMs).toFixed(1) + " ms";
-      el("footprint").textContent = examples ? "—" : result.footprint;
+      el("footprint").textContent = examples ? "—" : browserModel ? modelDownload + " model download" : result.footprint;
       const modeLabels = { "Starter": "Starter", "Next-Word": "Next word", "Prefix-Completion": "Completion" };
       el("prediction-mode").textContent = modeLabels[result.mode] || result.mode;
       const choices = [...result.suggestions];
@@ -399,6 +402,23 @@
       el("corrections").replaceChildren(make("span", "engine-error", message));
     }
 
+    function predictInBrowser(request) {
+      return new Promise((resolve, reject) => {
+        browserWorker ??= new Worker(new URL("./prediction-worker.js", location.href), { type: "module" });
+        browserWorker.onmessage = ({ data }) => {
+          if (data.status) status(data.status, "loading");
+          else if (data.error) reject(new Error(data.error));
+          else resolve(data.result);
+        };
+        browserWorker.onerror = () => {
+          browserWorker.terminate();
+          browserWorker = undefined;
+          reject(new Error("Could not start the browser engine. Retry or try a current browser."));
+        };
+        browserWorker.postMessage(request);
+      });
+    }
+
     async function predict(version) {
       if (busy) {
         queued = true;
@@ -421,16 +441,20 @@
               bytes += entryBytes;
             }
           }
-          const response = await fetch("/api/predict", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(request),
-          });
-          if (!response.headers.get("content-type")?.includes("application/json")) {
-            throw new Error("Start web_app.py to connect the prediction engine.");
+          if (browserModel) {
+            result = await predictInBrowser(request);
+          } else {
+            const response = await fetch("/api/predict", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(request),
+            });
+            if (!response.headers.get("content-type")?.includes("application/json")) {
+              throw new Error("Start web_app.py to connect the prediction engine.");
+            }
+            result = await response.json();
+            if (!response.ok) throw new Error(result.error || "The prediction engine could not complete this request.");
           }
-          result = await response.json();
-          if (!response.ok) throw new Error(result.error || "The prediction engine could not complete this request.");
           modelHasResponded = true;
         }
         if (version === predictionVersion) showPrediction(result);
@@ -450,13 +474,23 @@
     function schedulePrediction(delay = 160) {
       preview = null;
       renderPreview();
+      if (browserModel && !browserWorker && !modelHasResponded && delay !== 0) {
+        const start = button("suggestion", "Load prediction model (" + modelDownload + ")");
+        start.addEventListener("click", () => schedulePrediction(0));
+        el("suggestions").replaceChildren(start);
+        status("Runs on your device after download", "preview");
+        return;
+      }
       const version = ++predictionVersion;
       clearTimeout(timer);
       queued = false;
       for (const node of el("suggestions").querySelectorAll("button")) node.disabled = true;
       el("suggestions").setAttribute("aria-busy", "true");
       el("corrections").replaceChildren();
-      if (!examples) status(modelHasResponded ? "Predicting…" : "Loading engine…", "loading");
+      if (!examples) {
+        const loading = browserModel ? "Loading browser model…" : "Loading engine…";
+        status(modelHasResponded ? "Predicting…" : loading, "loading");
+      }
       if (examples) void predict(version);
       else timer = setTimeout(() => void predict(version), delay);
     }
@@ -602,7 +636,14 @@
       el("variant").value = "preview";
       el("spelling").checked = false;
       el("boost-value").textContent = "—";
-    } else el("boost-value").textContent = Number(el("boost").value).toFixed(2);
+    } else {
+      el("boost-value").textContent = Number(el("boost").value).toFixed(2);
+      if (browserModel) {
+        el("variant").disabled = true;
+        el("variant").title = "This browser build contains the fine-tuned INT8 model.";
+        el("footprint").textContent = modelDownload + " model download";
+      }
+    }
     drawKeyboard();
     setTab("compose");
     renderMode();
