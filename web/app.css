@@ -229,3 +229,17 @@ dialog::backdrop { background: #17251965; }
 }
 @media (max-width:340px) { .hero-copy { max-width: 79%; } .key-cluster { left: 65%; } .bar { gap: 4px; } .shell { width: calc(100% - 18px); } }
 @media (prefers-reduced-motion:no-preference) { button { transition: border-color .14s, background-color .14s, box-shadow .14s; } }
+
+/* Typing workspace */
+#send { background: #000; }
+#send:hover:not(:disabled) { background: #222; }
+#send:disabled { background: #555; }
+.composer > .panel-head { justify-content: flex-end; }
+.history-panel { margin-top: 20px; min-height: 170px; }
+#history-empty { padding: 20px 10px; }
+#corrections:empty { display: none; }
+.correction { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.correction-label { margin-right: 5px; }
+.correction button { min-height: 34px; }
+.correction-choice:hover { background: #f2e8c5; }
+.correction-keep { margin-left: auto !important; }
