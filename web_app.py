@@ -126,8 +126,14 @@ def predict(payload):
 
 
 class KeyboardHandler(BaseHTTPRequestHandler):
+    def send_cors_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
     def reply(self, status, content_type, body):
         self.send_response(status)
+        self.send_cors_headers()
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -140,6 +146,12 @@ class KeyboardHandler(BaseHTTPRequestHandler):
 
     def reply_json(self, status, data):
         self.reply(status, "application/json; charset=utf-8", json.dumps(data).encode("utf-8"))
+
+    def do_OPTIONS(self):
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.send_cors_headers()
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_GET(self):
         asset = STATIC_FILES.get(urlsplit(self.path).path)
@@ -187,25 +199,37 @@ class KeyboardHandler(BaseHTTPRequestHandler):
             self.reply_json(HTTPStatus.OK, result)
 
     def do_HEAD(self):
-        self.send_response(200)
+        self.send_response(HTTPStatus.OK)
+        self.send_cors_headers()
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
 
+
 def main():
-    on_render = (
+    on_hf = "SPACE_ID" in os.environ
+    on_cloud = (
         os.environ.get("RENDER", "").lower() == "true"
         or "PORT" in os.environ
+        or on_hf
     )
-    host = "0.0.0.0" if on_render else "127.0.0.1"
-    default_port = int(os.environ.get("PORT", 10000)) if on_render else 8765
+    host = "0.0.0.0" if on_cloud else "127.0.0.1"
+    if "PORT" in os.environ:
+        default_port = int(os.environ["PORT"])
+    elif on_hf:
+        default_port = 7860
+    elif on_cloud:
+        default_port = 10000
+    else:
+        default_port = 8765
 
     parser = argparse.ArgumentParser(description="Run the HTML keyboard and prediction API.")
+    parser.add_argument("--host", default=host, help="Override the listening host")
     parser.add_argument("--port", type=int, default=default_port, help="Override the listening port")
     args = parser.parse_args()
 
     os.chdir(ROOT)  # The original predictor resolves its LoRA adapter from the working directory.
-    with ThreadingHTTPServer((host, args.port), KeyboardHandler) as server:
-        print(f"Keyboard Lab is running at http://{host}:{server.server_port}", flush=True)
+    with ThreadingHTTPServer((args.host, args.port), KeyboardHandler) as server:
+        print(f"Keyboard Lab is running at http://{args.host}:{server.server_port}", flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
