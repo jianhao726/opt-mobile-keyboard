@@ -19,7 +19,7 @@
       ["Train meetup", "I just arrived at the station, where are you?", "I am on my "],
     ];
     const profiles = Object.fromEntries(["Solo", "User A", "User B"].map((name) => [
-      name, { draft: "", cache: new Map(), confirmed: new Set(), dismissed: new Set() },
+      name, { draft: "", cache: new Map(), dismissed: new Set() },
     ]));
     const logs = { solo: [], chat: [] };
     let mode = "solo";
@@ -60,7 +60,7 @@
       const lower = from.toLowerCase();
       let to = commonTypos.get(lower);
       const start = Array.from(left).length - from.length;
-      if (profile().confirmed.has(lower) || profile().dismissed.has(signature(from, start))) return;
+      if (profile().cache.has(lower) || profile().dismissed.has(signature(from, start))) return;
       if (!to) {
         // Let the existing contextual spellchecker handle other completed words.
         if (!examples && el("spelling").checked && from === lower) {
@@ -164,15 +164,11 @@
       schedulePrediction();
     }
 
-    function learn(text, confirm = false) {
+    function learn(text) {
       const cache = profile().cache;
-      const confirmed = profile().confirmed;
       for (const token of text.split(/\s+/u)) {
         const word = token.replace(/^[.,!?;:'"]+|[.,!?;:'"]+$/g, "").toLowerCase();
         if (!/^\p{L}{2,64}$/u.test(word)) continue;
-        if (confirm && (confirmed.has(word) || confirmed.size < 1024)) {
-          confirmed.add(word);
-        }
         if (cache.has(word) || cache.size < 1024) {
           cache.set(word, Math.min(1_000_000, (cache.get(word) || 0) + 1));
         }
@@ -182,7 +178,7 @@
 
     function renderVocabulary() {
       const words = [...profile().cache].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-      el("reset-cache").disabled = words.length === 0 && profile().confirmed.size === 0;
+      el("reset-cache").disabled = words.length === 0;
       el("profile-label").textContent = profileName();
       const items = words.map(([word, count]) => {
         const item = make("li", "vocab-item");
@@ -317,7 +313,7 @@
       else if (predictionMode === "Prefix-Completion") result = current.replace(/[^\s]*$/u, () => word + " ");
       else result = current + (current && !/\s$/.test(current) ? " " : "") + word + " ";
       if (result.length > input.maxLength) return;
-      learn(word, true);
+      learn(word);
       setDraft(result, result.length);
     }
 
@@ -344,7 +340,7 @@
               if (position !== start) shifted.add(signature(name, position > start ? position + delta : position));
             }
             profile().dismissed = shifted;
-            learn(replacement, true);
+            learn(replacement);
             setDraft(corrected, before.length + replacement.length);
           });
           row.append(use);
@@ -352,7 +348,6 @@
         const keep = button("correction-keep", "Keep original");
         keep.addEventListener("click", () => {
           profile().dismissed.add(key);
-          learn(word, true);
           row.remove();
           focusDraft();
         });
@@ -447,7 +442,7 @@
             }
           }
           if (browserModel) {
-            result = await predictInBrowser({ ...request, confirmed: [...profile().confirmed] });
+            result = await predictInBrowser(request);
           } else {
             const response = await fetch("/api/predict", {
               method: "POST",
@@ -575,12 +570,7 @@
       el("speaker").value = "User A";
       renderMode();
     });
-    el("reset-cache").addEventListener("click", () => {
-      profile().cache.clear();
-      profile().confirmed.clear();
-      renderVocabulary();
-      schedulePrediction();
-    });
+    el("reset-cache").addEventListener("click", () => { profile().cache.clear(); renderVocabulary(); schedulePrediction(); });
     input.maxLength = 2048;
     el("undo-autocorrect").addEventListener("click", () => {
       if (!lastCorrection) return;
