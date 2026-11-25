@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import os
+import time
 from functools import lru_cache
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -65,13 +66,14 @@ def clean_vocabulary(cache):
 
 
 def candidate(pair):
-    word, probability = pair
-    return {"word": word, "probability": probability}
+    word, _ = pair
+    return {"word": word}
 
 
 def predict(payload):
     if not isinstance(payload, dict):
         raise InvalidRequest("Send a JSON object.")
+    started = time.perf_counter()
     draft = payload.get("draft", "")
     context = payload.get("context", [])
     variant = payload.get("variant", "lora_int8")
@@ -89,6 +91,11 @@ def predict(payload):
     if not isinstance(spelling, bool):
         raise InvalidRequest("Spelling must be true or false.")
     cache = clean_vocabulary(payload.get("cache", {}))
+    trusted = payload.get("trustedWords", [])
+    if not isinstance(trusted, list) or len(trusted) > MAX_CACHE_SIZE or not all(
+        isinstance(w, str) and 2 <= len(w) <= 64 and w.isalpha() for w in trusted
+    ):
+        raise InvalidRequest("Send up to 1024 confirmed vocabulary words.")
     previous = " ".join(message.strip() for message in context if message.strip())
     prefix = previous + " " if previous else ""
     model_input = prefix + (draft if draft.strip() or not prefix else "")
@@ -97,18 +104,23 @@ def predict(payload):
     with MODEL_LOCK:
         model = load_model(variant)
         model.user_freq_cache = cache
+        model.trusted_words = {word.lower() for word in trusted}
         try:
             suggestions, latency, mode = model.suggest(model_input, top_k=3, cache_weight=weight)
             punctuation = model.suggest_punctuation(model_input) if draft.strip() else None
             corrections = model.spelling_suggestions(draft, prefix) if spelling and draft else []
         finally:
             model.user_freq_cache = {}
+            model.trusted_words = set()
     return {
         "suggestions": [candidate(pair) for pair in suggestions],
         "punctuation": candidate(punctuation) if punctuation else None,
         "corrections": corrections,
         "mode": mode,
-        "latencyMs": latency,
+        "latencyMs": round((time.perf_counter() - started) * 1000, 2),
+        "modelLabel": model.variant_info["label"],
+        "actualVariant": model.variant,
+        "warning": getattr(model, "load_warning", ""),
         "footprint": model.variant_info["size_label"],
     }
 
