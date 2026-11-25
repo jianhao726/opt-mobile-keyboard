@@ -3,9 +3,82 @@
   function init() {
     const el = id => document.getElementById(id);
     const input = el("draft");
-    const profiles = Object.fromEntries(["Solo", "User A", "User B"].map(name =>
-      [name, { draft: "", cache: new Map(), trusted: new Set(), dismissed: new Set() }]));
+    const browserModel = document.body.dataset.predictions === "browser";
+    const modelSize = Number(document.body.dataset.modelSize);
+    const modelDownload = modelSize > 0 ? `${modelSize} MB` : "";
+    const chatSpeakers = ["User A", "User B"];
+    const storagePrefix = "keyform.v1.";
+    const messagePrefix = storagePrefix + "message.";
+    let storage;
+    try { storage = window.localStorage; } catch { /* Storage can be disabled. */ }
+
+    function readSaved(key) {
+      try { return storage?.getItem(key) ?? ""; } catch { return ""; }
+    }
+
+    function writeSaved(key, value) {
+      try {
+        if (value) storage?.setItem(key, value);
+        else storage?.removeItem(key);
+      } catch { /* Keep the open session usable if storage is unavailable. */ }
+    }
+
+    const profiles = Object.fromEntries(["Solo", ...chatSpeakers].map(name =>
+      [name, { draft: readSaved(storagePrefix + "draft." + name).slice(0, input.maxLength),
+        cache: new Map(), trusted: new Set(), dismissed: new Set() }]));
     const logs = { solo: [], chat: [] };
+
+    function readMessage(messageMode, key, value) {
+      try {
+        const { sender, text, sample } = JSON.parse(value);
+        const validSender = messageMode === "solo" ? sender === "Solo" : chatSpeakers.includes(sender);
+        if (validSender && typeof text === "string" && text.trim()) {
+          return { key, sender, text, sample: sample === true };
+        }
+      } catch { /* An older or damaged entry does not prevent startup. */ }
+      return null;
+    }
+
+    function syncMessage(key, value) {
+      if (!key?.startsWith(messagePrefix)) return;
+      const messageMode = key.slice(messagePrefix.length).split(".", 1)[0];
+      if (messageMode !== "solo" && messageMode !== "chat") return;
+      const messages = logs[messageMode];
+      const index = messages.findIndex(message => message.key === key);
+      if (index !== -1) messages.splice(index, 1);
+      const message = readMessage(messageMode, key, value);
+      if (message) messages.push(message);
+      return messageMode;
+    }
+
+    if (storage) {
+      const keys = Object.keys(storage).filter(key => key.startsWith(messagePrefix)).sort();
+      for (const key of keys) syncMessage(key, readSaved(key));
+      window.addEventListener("storage", event => {
+        if (event.storageArea !== storage) return;
+        const changedMode = syncMessage(event.key, event.newValue);
+        if (!changedMode) return;
+        logs[changedMode].sort((a, b) => a.key.localeCompare(b.key));
+        if (changedMode === mode) {
+          renderHistory();
+          if (mode === "chat") schedule();
+        }
+      });
+    }
+
+    function addMessage(sender, text, sample = false) {
+      const time = String(Math.round((performance.timeOrigin + performance.now()) * 1000));
+      const suffix = crypto.getRandomValues(new Uint32Array(2)).join("-");
+      const key = `${messagePrefix}${mode}.${time}.${suffix}`;
+      logs[mode].push({ key, sender, text, sample });
+      writeSaved(key, JSON.stringify({ sender, text, sample }));
+    }
+
+    function saveDraft(name, text) {
+      if (profiles[name].draft === text) return;
+      profiles[name].draft = text;
+      writeSaved(storagePrefix + "draft." + name, text);
+    }
     const prompts = {
       solo: [["Low battery", "My phone battery is at 1%, do you have a "],
         ["Train meetup", "Sure, I will meet you at the train "],
@@ -14,8 +87,18 @@
         ["Phone battery", "My phone battery is at 1%, do you have a charger?", "Yes, I have a "],
         ["Train meetup", "I just arrived at the station, where are you?", "I am on my "]]
     };
-    let mode = "solo", version = 0, timer, busy = false, queued = false, preview = null;
-    const profileName = () => mode === "solo" ? "Solo" : el("speaker").value;
+    let mode = readSaved(storagePrefix + "mode") === "chat" ? "chat" : "solo";
+    let version = 0, timer, busy = false, queued = false, preview = null;
+    let browserWorker, browserModelRequested = false, browserModelReady = false;
+    const speaker = el("speaker");
+    if (readSaved(storagePrefix + "speaker") === "User B") speaker.value = "User B";
+
+    function selectSpeaker(name) {
+      speaker.value = name;
+      writeSaved(storagePrefix + "speaker", name);
+    }
+
+    const profileName = () => mode === "solo" ? "Solo" : speaker.value;
     const profile = () => profiles[profileName()];
     const signature = (word, start) => JSON.stringify([word.toLowerCase(), start]);
     const make = (tag, cls, text) => {
@@ -52,7 +135,7 @@
     }
     function setDraft(text, caret) {
       input.value = text;
-      profile().draft = text;
+      saveDraft(profileName(), text);
       if (!text) profile().dismissed.clear();
       el("send").disabled = !text.trim();
       if (caret !== undefined) focus(caret);
@@ -82,9 +165,10 @@
       const messages = logs[mode];
       el("history-count").textContent = `${messages.length} ${messages.length === 1 ? "message" : "messages"}`;
       el("history-empty").hidden = messages.length > 0;
-      el("history").replaceChildren(...messages.map(({sender,text}) => {
+      el("history").replaceChildren(...messages.map(({ sender, text, sample }) => {
         const row = make("div", "history-item"); row.dataset.speaker = sender;
-        row.append(make("span", "history-sender", sender === "Solo" ? "You" : sender), make("p", "history-text", text));
+        const label = sample ? `${sender} · Sample` : sender === "Solo" ? "You" : sender;
+        row.append(make("span", "history-sender", label), make("p", "history-text", text));
         return row;
       }));
       el("history").scrollTop = el("history").scrollHeight;
@@ -93,10 +177,11 @@
       const text = input.value.trim();
       if (!text) return;
       const sender = profileName();
-      logs[mode].push({sender,text});
+      addMessage(sender, text);
       learn(text); // Sending text changes frequency, but never confirms its spelling.
-      profile().draft = ""; profile().dismissed.clear();
-      if (mode === "chat" && el("auto-switch").checked) el("speaker").value = sender === "User A" ? "User B" : "User A";
+      saveDraft(sender, "");
+      profile().dismissed.clear();
+      if (mode === "chat" && el("auto-switch").checked) selectSpeaker(sender === "User A" ? "User B" : "User A");
       setDraft(profile().draft, profile().draft.length);
       el("send-status").textContent = `Sent${mode === "chat" ? " as " + sender : ""}.`;
       renderHistory(); renderVocabulary();
@@ -140,9 +225,8 @@
       el("prompts").replaceChildren(...prompts[mode].map(entry => {
         const node = button("prompt", "", () => {
           if (mode === "chat") {
-            logs.chat = [{sender:"User A",text:entry[1]}];
-            for (const name of ["User A","User B"]) { profiles[name].draft=""; profiles[name].dismissed.clear(); }
-            el("speaker").value="User B";
+            addMessage("User A", entry[1], true);
+            selectSpeaker("User B");
           }
           profile().dismissed.clear();
           setDraft(entry[mode === "solo" ? 1 : 2], entry[mode === "solo" ? 1 : 2].length);
@@ -155,10 +239,11 @@
     }
     function showPrediction(result) {
       preview = result.suggestions.length ? {word:result.suggestions[0].word,mode:result.mode} : null;
-      renderPreview(); status(result.warning || "Model ready", result.warning ? "warning" : "ready");
+      renderPreview();
+      status(result.warning || (browserModel ? "Running on this device" : "Model ready"), result.warning ? "warning" : "ready");
       el("latency").textContent = Number(result.latencyMs).toFixed(1)+" ms";
-      el("footprint").textContent = result.footprint;
-      el("actual-model").textContent = result.modelLabel || "";
+      el("footprint").textContent = browserModel ? modelDownload || "—" : result.footprint;
+      el("actual-model").textContent = browserModel ? "LoRA fine-tuned · INT8" : result.modelLabel || "";
       const choices = result.suggestions.map(({word}) => button("suggestion",word,() => choose(word,result.mode,false)));
       if (result.punctuation) choices.push(button("suggestion suggestion-punct", result.punctuation.word, () => choose(result.punctuation.word,result.mode,true)));
       el("suggestions").replaceChildren(...(choices.length ? choices : [make("span","suggest-empty",input.value ? "No matches. Keep typing." : "Type a message to see suggestions.")]));
@@ -170,6 +255,30 @@
       el("suggestions").replaceChildren(button("suggestion","Retry",() => schedule(0)));
       el("corrections").replaceChildren(make("span","engine-error",message));
     }
+    function predictInBrowser(request, requestVersion) {
+      return new Promise((resolve, reject) => {
+        const worker = browserWorker ??= new Worker(new URL("prediction-worker.js", document.baseURI), { type: "module" });
+        worker.onmessage = ({ data }) => {
+          if (data.status) {
+            if (requestVersion === version) status(data.status, "loading");
+          } else if (data.error) {
+            reject(new Error(data.error));
+          } else if (data.result) {
+            resolve(data.result);
+          } else {
+            reject(new Error("The browser engine returned an invalid response."));
+          }
+        };
+        worker.onerror = worker.onmessageerror = () => {
+          worker.terminate();
+          browserWorker = undefined;
+          browserModelReady = false;
+          reject(new Error("Could not start the browser engine. Retry or try a current browser."));
+        };
+        worker.postMessage({ ...request, confirmed: request.trustedWords });
+      });
+    }
+
     async function predict(requestVersion) {
       if (busy) { queued=true; return; }
       busy=true;
@@ -177,17 +286,23 @@
         const request = { draft:input.value, context: mode === "chat" ? logs.chat.slice(-2).map(m=>m.text) : [],
           variant:el("variant").value, cacheWeight:Number(el("boost").value), spelling:el("spelling").checked,
           cache:Object.fromEntries(profile().cache), trustedWords:[...profile().trusted] };
-        const encoder = new TextEncoder();
-        while (encoder.encode(JSON.stringify(request)).length > 128 * 1024) {
-          const keys = Object.keys(request.cache);
-          if (keys.length) delete request.cache[keys[keys.length - 1]];
-          else if (request.trustedWords.length) request.trustedWords.pop();
-          else throw new Error("This message is too large to send.");
+        let result;
+        if (browserModel) {
+          result = await predictInBrowser(request, requestVersion);
+          browserModelReady = true;
+        } else {
+          const encoder = new TextEncoder();
+          while (encoder.encode(JSON.stringify(request)).length > 128 * 1024) {
+            const keys = Object.keys(request.cache);
+            if (keys.length) delete request.cache[keys[keys.length - 1]];
+            else if (request.trustedWords.length) request.trustedWords.pop();
+            else throw new Error("This message is too large to send.");
+          }
+          const response = await fetch("/api/predict", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(request)});
+          if (!response.headers.get("content-type")?.includes("application/json")) throw new Error("Run python web_app.py and open http://127.0.0.1:8765.");
+          result = await response.json();
+          if (!response.ok) throw new Error(result.error || "Prediction failed.");
         }
-        const response = await fetch("/api/predict", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(request)});
-        if (!response.headers.get("content-type")?.includes("application/json")) throw new Error("Run python web_app.py and open http://127.0.0.1:8765.");
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || "Prediction failed.");
         if (requestVersion===version) showPrediction(result);
       } catch(error) { if (requestVersion===version) showError(error.message); }
       finally {
@@ -200,8 +315,21 @@
       preview=null; renderPreview(); clearTimeout(timer); queued=false;
       const requestVersion=++version;
       el("corrections").replaceChildren();
-      for (const node of el("suggestions").querySelectorAll("button")) node.disabled=true;
-      el("suggestions").setAttribute("aria-busy","true"); status("Predicting…","loading");
+      const suggestions = el("suggestions");
+      if (browserModel && !browserModelRequested) {
+        const label = modelDownload ? `Load prediction model (${modelDownload})` : "Load prediction model";
+        if (!suggestions.firstElementChild) {
+          suggestions.append(button("suggestion", label, () => {
+            browserModelRequested = true;
+            schedule(0);
+          }));
+        }
+        status("Runs on your device after download", "idle");
+        return;
+      }
+      for (const node of suggestions.querySelectorAll("button")) node.disabled=true;
+      suggestions.setAttribute("aria-busy","true");
+      status(browserModel && !browserModelReady ? "Loading browser model…" : "Predicting…", "loading");
       timer=setTimeout(() => void predict(requestVersion),delay);
     }
     const settings=el("settings-dialog");
@@ -211,12 +339,24 @@
       const r=settings.getBoundingClientRect();
       if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom) settings.close();
     }});
-    for(const next of ["solo","chat"]) el("mode-"+next).addEventListener("click",()=>{mode=next;renderMode();});
-    el("speaker").addEventListener("change",renderMode);
-    el("reset-chat").addEventListener("click",()=>{
-      logs.chat=[];
-      for(const name of ["User A","User B"]) {profiles[name].draft="";profiles[name].dismissed.clear();}
-      el("speaker").value="User A";renderMode();
+    for (const next of ["solo", "chat"]) el("mode-" + next).addEventListener("click", () => {
+      mode = next;
+      writeSaved(storagePrefix + "mode", mode);
+      renderMode();
+    });
+    speaker.addEventListener("change", () => {
+      selectSpeaker(speaker.value);
+      renderMode();
+    });
+    el("reset-chat").addEventListener("click", () => {
+      for (const { key } of logs.chat) writeSaved(key, "");
+      logs.chat = [];
+      for (const name of chatSpeakers) {
+        saveDraft(name, "");
+        profiles[name].dismissed.clear();
+      }
+      selectSpeaker("User A");
+      renderMode();
     });
     el("reset-cache").addEventListener("click",()=>{profile().cache.clear();profile().trusted.clear();renderVocabulary();schedule();});
     input.addEventListener("input",event=>{
@@ -235,6 +375,11 @@
     el("send").addEventListener("click",send);
     el("boost").addEventListener("input",()=>{el("boost-value").textContent=Number(el("boost").value).toFixed(2);schedule();});
     for(const id of ["variant","spelling"]) el(id).addEventListener("change",()=>schedule());
+    if (browserModel) {
+      el("variant").value = "lora_int8";
+      el("variant").disabled = true;
+      el("footprint").textContent = modelDownload || "—";
+    }
     renderMode();
   }
   if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",init,{once:true}); else init();

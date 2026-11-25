@@ -21,7 +21,7 @@ The latest 128 context tokens are retained. A dictionary validates word candidat
 
 Personalisation boosts are capped. Suggestions no longer display percentages. The engine reports the actual model configuration, including an FP32 fallback if dynamic quantization is unavailable. Static model-size labels are replaced with an unmeasured status. Request processing time includes loading, queuing, prediction, punctuation and spelling, but excludes network transit and browser rendering. Multi-token candidate scoring can increase latency.
 
-No model retraining was performed for this update. The original adapter is included unchanged. Message history, trusted vocabulary and frequency counts are in-memory browser-session data.
+No model retraining was performed for this update. The original adapter is included unchanged. Sent messages and drafts are saved in this browser and restored after a refresh. The trusted vocabulary and frequency counts last for the current page session.
 
 ## Public deployment
 
