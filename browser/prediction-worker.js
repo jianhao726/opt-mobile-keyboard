@@ -78,6 +78,17 @@ class Engine {
     this.dictionary = dictionary;
     this.logitCache = new Map();
     this.spellingCache = new Map();
+    this.typoCache = new Map();
+  }
+
+  isDetectableTypo(word) {
+    const lower = word.toLowerCase();
+    if (Object.hasOwn(this.dictionary, lower)) return false;
+    if (!this.typoCache.has(lower)) {
+      if (this.typoCache.size === 1024) this.typoCache.delete(this.typoCache.keys().next().value);
+      this.typoCache.set(lower, spellingCandidates(lower, this.dictionary).length > 0);
+    }
+    return this.typoCache.get(lower);
   }
 
   encode(text, addSpecialTokens) {
@@ -137,8 +148,10 @@ class Engine {
     return ranked;
   }
 
-  async predict({ draft, context, spelling, cacheWeight, cache }) {
+  async predict({ draft, context, spelling, cacheWeight, cache, confirmed = [] }) {
     const startTime = performance.now();
+    const confirmedSet = new Set(Array.isArray(confirmed) ? confirmed.map(word => String(word).toLowerCase()) : []);
+    const isUsableCacheWord = word => confirmedSet.has(word) || !this.isDetectableTypo(word);
     const previous = context.map(message => message.trim()).filter(Boolean).join(" ");
     const text = previous ? previous + " " + (draft.trim() ? draft : "") : draft;
     const next = text.endsWith(" ");
@@ -154,9 +167,12 @@ class Engine {
         : this.words.filter(item => item.lower.startsWith(lower) && item.word.length > partial.length);
       if (matches.length) {
         const logits = await this.nextLogits(prefix);
-        suggestions = rank(matches, (id, word) => logits[id] + cacheWeight * Math.log1p(Object.hasOwn(cache, word) ? cache[word] : 0), 3);
+        suggestions = rank(matches, (id, word) => logits[id] + cacheWeight * Math.log1p(
+          Object.hasOwn(cache, word) && isUsableCacheWord(word) ? cache[word] : 0
+        ), 3);
       } else {
-        suggestions = Object.entries(cache).filter(([word]) => word.startsWith(lower) && word.length > lower.length)
+        suggestions = Object.entries(cache)
+          .filter(([word]) => isUsableCacheWord(word) && word.startsWith(lower) && word.length > lower.length)
           .sort((a, b) => b[1] - a[1]).slice(0, 3).map(([word]) => ({ word, probability: .9 }));
       }
       if (/^\p{Lu}/u.test(partial)) suggestions.forEach(item => { item.word = capitalize(item.word); });
@@ -169,7 +185,7 @@ class Engine {
     const corrections = [];
     if (spelling && draft) {
       for (const match of draft.matchAll(/(?<![\p{L}\p{N}_'’@/.-])([A-Za-z]+)(?=[,.!?;:]*\s)/gu)) {
-        if (Object.hasOwn(cache, match[1].toLowerCase())) continue;
+        if (confirmedSet.has(match[1].toLowerCase())) continue;
         const left = draft.slice(0, match.index);
         const candidates = await this.wordCorrections(match[1], (previous ? previous + " " : "") + left);
         if (candidates.length) {
