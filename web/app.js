@@ -82,8 +82,7 @@
       writeSaved(storagePrefix + "draft." + name, text);
     }
     const prompts = {
-      solo: [["Low battery", "My phone battery is at 1%, do you have a "],
-        ["Train meetup", "Sure, I will meet you at the train "],
+      solo: [["Train meetup", "Sure, I will meet you at the train "],
         ["Grocery run", "I am heading to the groc"], ["Lunch plans", "Hey! Are you free for lun"]],
       chat: [["Lunch invite", "Hey! Are you free for lunch today?", ""],
         ["Phone battery", "My phone battery is at 1%, do you have a charger?", "Yes, I have a "],
