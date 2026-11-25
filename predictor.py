@@ -1,5 +1,7 @@
 import gc
 import math
+import logging
+from pathlib import Path
 import os
 import re
 import time
@@ -11,7 +13,7 @@ from spellchecker import SpellChecker
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 BASE_MODEL_NAME = "facebook/opt-125m"
-ADAPTER_DIR = "./models/opt-125m-lora-adapter"
+ADAPTER_DIR = str(Path(__file__).resolve().parent / "models" / "opt-125m-lora-adapter")
 
 PUNCTUATION_TOKENS = (".", ",", "?", "!")
 
@@ -67,7 +69,8 @@ class OPTKeyboardPredictor:
         self.tokenizer = tokenizer
         self.device = device
         self.variant = variant
-        self.variant_info = VARIANT_METADATA.get(variant, {})
+        self.variant_info = dict(VARIANT_METADATA.get(variant, {}))
+        self.trusted_words = set()
         self.user_freq_cache = {}
         self._last_log_probs_cache = (None, None)
         self._build_vocabulary_index()
@@ -82,6 +85,9 @@ class OPTKeyboardPredictor:
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
+        actual_variant = variant
+        load_warning = ""
+        tokenizer.truncation_side = "left"
         # Explicitly force Float32 on CPU so INT8 dynamic quantization never hits a Half/Float mismatch
         base_model = AutoModelForCausalLM.from_pretrained(
             BASE_MODEL_NAME,
@@ -126,13 +132,19 @@ class OPTKeyboardPredictor:
                     model = q_model
                     del merged_model
                     gc.collect()
-                except Exception:
+                except Exception as exc:
+                    actual_variant = "lora_fp32"
+                    load_warning = "INT8 unavailable. Using the LoRA FP32 model."
+                    logging.warning("INT8 fallback: %s", exc)
                     # Graceful fallback to Float32 merged model if container lacks qint8 CPU ops
                     model = merged_model
         else:
             raise ValueError(f"Unknown variant: {variant}")
 
-        return cls(model=model, tokenizer=tokenizer, device=device, variant=variant)
+        predictor = cls(model=model, tokenizer=tokenizer, device=device, variant=actual_variant)
+        predictor.load_warning = load_warning
+        predictor.variant_info["size_label"] = "Model size has not been measured in this environment"
+        return predictor
 
     def _build_vocabulary_index(self):
         vocab = self.tokenizer.get_vocab()
@@ -162,6 +174,18 @@ class OPTKeyboardPredictor:
 
         self.whole_word_tensor = torch.tensor(self.whole_word_ids, dtype=torch.long)
         self.punct_tensor = torch.tensor(self.punct_ids, dtype=torch.long)
+        # A lexicon validates complete words, including words split into several BPE tokens.
+        spell = english_spellchecker()
+        self.lexicon = {w for w in spell.word_frequency.dictionary
+                        if w.isascii() and w.isalpha() and len(w) <= 24
+                        and w.lower() not in PROFANITY_BLOCKLIST}
+        self.words_by_first_token = {}
+        words = sorted(self.lexicon, key=lambda w: (-spell.word_usage_frequency(w), w))
+        encoded = self.tokenizer([" " + word for word in words], add_special_tokens=False)["input_ids"]
+        for word, ids in zip(words, encoded):
+            if ids:
+                self.words_by_first_token.setdefault(ids[0], []).append(word)
+
 
     def update_user_cache(self, text: str):
         words = [w.strip(".,!?;:'\"") for w in text.split()]
@@ -246,12 +270,13 @@ class OPTKeyboardPredictor:
             word = match.group(1)
 
             # Skip words the user has already taught the keyboard via sent/accepted messages
-            if word.lower() in self.user_freq_cache:
+            if word.lower() in self.trusted_words:
                 continue
 
             prefix = context_before + text[:match.start(1)]
             ranked = self._rank_word_candidates(word, prefix)
-            if ranked:
+            if ranked or (word.isascii() and word.isalpha() and 3 <= len(word) <= 24
+                          and not english_spellchecker().known([word.lower()])):
                 results.append(
                     {
                         "word": word,
@@ -313,69 +338,86 @@ class OPTKeyboardPredictor:
         best_token_id = self.punct_ids[best_idx]
         return self.id_to_word[best_token_id], round(probs[best_idx].item(), 4)
 
+    def _score_complete_words(self, words, context):
+        """Sum conditional token log probabilities for every complete candidate word."""
+        left = self.tokenizer.encode(context.rstrip(), add_special_tokens=False)
+        bos = self.tokenizer.bos_token_id
+        if bos is None:
+            bos = self.tokenizer.eos_token_id
+        sequences, spans = [], []
+        for word in words:
+            suffix = self.tokenizer.encode(" " + word, add_special_tokens=False)
+            prefix = left[-max(1, 128 - len(suffix)):] or [bos]
+            sequences.append(prefix + suffix)
+            spans.append((len(prefix), suffix))
+        results = []
+        # Small batches keep candidate scoring memory bounded on CPU.
+        for offset in range(0, len(sequences), 8):
+            batch = sequences[offset:offset + 8]
+            length = max(map(len, batch))
+            pad = self.tokenizer.pad_token_id
+            ids = torch.tensor([seq + [pad] * (length - len(seq)) for seq in batch], device=self.device)
+            masks = torch.tensor([[1] * len(seq) + [0] * (length - len(seq)) for seq in batch], device=self.device)
+            with torch.no_grad():
+                logits = self.model(input_ids=ids, attention_mask=masks).logits.float()
+                # Only materialise probabilities at candidate-token positions.
+                for row, (prefix_length, suffix) in enumerate(spans[offset:offset + 8]):
+                    selected = logits[row, prefix_length - 1:prefix_length + len(suffix) - 1]
+                    logs = torch.log_softmax(selected, dim=-1)
+                    score = sum(logs[i, token].item() for i, token in enumerate(suffix))
+                    results.append(score)
+        return results
+
     def suggest(self, input_text: str, top_k: int = 3, cache_weight: float = 0.35):
         start_time = time.perf_counter()
-
-        if not input_text:
-            latency_ms = (time.perf_counter() - start_time) * 1000
-            return [("I", 0.32), ("Hi", 0.25), ("Hey", 0.18)], round(latency_ms, 2), "Starter"
-
-        if input_text.endswith(" "):
-            mode = "Next-Word"
-            context_prefix = input_text.rstrip()
-            partial_prefix = ""
+        if not input_text.strip():
+            return [], 0.0, "Starter"
+        if input_text[-1].isspace():
+            mode, context, partial = "Next-Word", input_text.rstrip(), ""
         else:
+            match = re.search(r"(\S+)$", input_text)
+            partial = match.group(1) if match else ""
+            context = input_text[:match.start()].rstrip() if match else input_text
             mode = "Prefix-Completion"
-            parts = input_text.rsplit(" ", 1)
-            if len(parts) == 2:
-                context_prefix, partial_prefix = parts[0], parts[1]
-            else:
-                context_prefix, partial_prefix = "", parts[0]
-
-        log_probs = self._get_next_token_log_probs(context_prefix).clone()
-
-        if self.user_freq_cache and cache_weight > 0:
-            for cached_word, count in self.user_freq_cache.items():
-                for tok_id in self.word_to_ids.get(cached_word, []):
-                    log_probs[tok_id] += cache_weight * math.log(1.0 + count)
-
-        if mode == "Next-Word":
-            candidate_ids = self.whole_word_tensor
-        else:
-            p_lower = partial_prefix.lower()
-            matched_ids = [
-                tid
-                for tid, w in self.id_to_word.items()
-                if w.lower().startswith(p_lower) and len(w) > len(partial_prefix)
-            ]
-            if not matched_ids:
-                custom_matches = []
-                for w, _ in sorted(
-                    self.user_freq_cache.items(), key=lambda item: -item[1]
-                ):
-                    if w.startswith(p_lower) and len(w) > len(partial_prefix):
-                        display_w = (
-                            w.capitalize()
-                            if partial_prefix and partial_prefix[0].isupper()
-                            else w
-                        )
-                        custom_matches.append((display_w, 0.90))
-                latency_ms = (time.perf_counter() - start_time) * 1000
-                return custom_matches[:top_k], round(latency_ms, 2), mode
-            candidate_ids = torch.tensor(matched_ids, dtype=torch.long)
-
-        candidate_scores = log_probs[candidate_ids]
-        k = min(top_k, len(candidate_ids))
-        top_scores, top_indices = torch.topk(candidate_scores, k=k)
-
-        probs = torch.softmax(top_scores, dim=-1).tolist()
-        suggestions = []
-        for idx, prob in zip(top_indices.tolist(), probs):
-            token_id = candidate_ids[idx].item()
-            word = self.id_to_word[token_id]
-            if partial_prefix and partial_prefix[0].isupper():
-                word = word.capitalize()
-            suggestions.append((word, round(prob, 4)))
-
-        latency_ms = (time.perf_counter() - start_time) * 1000
-        return suggestions, round(latency_ms, 2), mode
+        logs = self._get_next_token_log_probs(context)
+        candidates = {}
+        # Single-token candidates are validated against the dictionary, avoiding fragments.
+        for token_id, word in self.id_to_word.items():
+            lower = word.lower()
+            if lower not in self.lexicon and lower not in self.trusted_words:
+                continue
+            if partial and (not lower.startswith(partial.lower()) or len(word) <= len(partial)):
+                continue
+            if word.isalpha():
+                candidates[lower] = max(candidates.get(lower, -math.inf), logs[token_id].item())
+        # Retrieve multi-token candidates by first-token likelihood, then score the whole word.
+        additional = []
+        for tid in torch.argsort(logs, descending=True).tolist():
+            matching = [w for w in self.words_by_first_token.get(tid, [])
+                        if (not partial or (w.startswith(partial.lower()) and len(w) > len(partial)))
+                        and w not in candidates]
+            additional.extend(matching[:4])
+            if len(additional) >= 24:
+                break
+        for word in self.trusted_words:
+            if word.isascii() and word.isalpha() and word not in candidates and word not in additional:
+                if not partial or (word.startswith(partial.lower()) and len(word) > len(partial)):
+                    additional.append(word)
+        additional = additional[:48]
+        if additional:
+            candidates.update(zip(additional, self._score_complete_words(additional, context)))
+        ranked = []
+        for word, score in candidates.items():
+            count = self.user_freq_cache.get(word, 0)
+            # Bound personalisation so repeatedly sent words cannot receive an unlimited boost.
+            score += min(0.8, max(0.0, cache_weight) * math.log1p(count))
+            ranked.append((word, score))
+        ranked.sort(key=lambda item: (-item[1], item[0]))
+        result = []
+        for word, score in ranked[:top_k]:
+            if word == "i":
+                word = "I"
+            if partial and partial[0].isupper():
+                word = word.upper() if partial.isupper() and len(partial) > 1 else word.capitalize()
+            result.append((word, math.exp(min(0.0, score))))
+        return result, round((time.perf_counter() - start_time) * 1000, 2), mode
