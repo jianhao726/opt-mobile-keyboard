@@ -36,7 +36,7 @@ jobs:
           python -m pip install -r browser/requirements-export.txt
           npm ci --prefix browser
 
-      - name: Export and validate the fine-tuned model
+      - name: Export and validate all three browser models
         run: python browser/export_model.py browser/site/assets
 
       - name: Assemble the site

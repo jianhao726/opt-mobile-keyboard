@@ -1,12 +1,12 @@
 # Keyform on GitHub Pages
 
-The `codex/browser-inference` branch builds a static version of Keyform. It runs the LoRA fine-tuned OPT-125M model in a browser worker using ONNX Runtime Web. Select **Load prediction model** to download the model, then try a sample prompt. Drafts and past messages stay in the browser. The model selector is fixed to the INT8 variant packaged for this site.
+Keyform on GitHub Pages runs OPT-125M in a browser worker using ONNX Runtime Web. Choose a variant in **Engine settings**, select **Load prediction model**, then try a sample prompt. Drafts and sent messages stay in the browser. The INT8 variant has the smallest download.
 
 ## Publish
 
-In the GitHub repository, open **Settings → Pages** and select **GitHub Actions** under **Build and deployment → Source**. If the `github-pages` environment restricts branches, allow `codex/browser-inference` in **Settings → Environments → github-pages → Deployment branches and tags**. Open **Actions → Publish browser keyboard** and rerun the failed job after enabling Pages, or push another commit to that branch.
+In the GitHub repository, open **Settings → Pages** and select **GitHub Actions** under **Build and deployment → Source**. If the `github-pages` environment restricts branches, allow `main` in **Settings → Environments → github-pages → Deployment branches and tags**. A push to `main` starts **Publish browser keyboard**.
 
-The workflow merges the repository's LoRA adapter into a pinned OPT-125M checkpoint, exports and validates the INT8 model, then uploads the generated site as a Pages artifact. The model binary is generated during the build.
+The workflow exports and validates the original OPT-125M checkpoint in FP32 and the LoRA fine-tuned variant in FP32 and INT8, then uploads the generated site as a Pages artifact. The FP32 variants share identical weight files.
 
 ## Preview locally
 
@@ -21,4 +21,4 @@ npm run build --prefix browser
 python -m http.server 8766 --bind 127.0.0.1 --directory browser/site
 ```
 
-Open [the local browser build](http://127.0.0.1:8766/). The first export downloads the base model. The page downloads the smaller INT8 model only when the visitor selects **Load prediction model**.
+Open [the local browser build](http://127.0.0.1:8766/). The first export downloads the base model. In the browser, the load button shows the selected variant's download size.

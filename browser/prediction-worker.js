@@ -16,15 +16,20 @@ async function asset(name) {
   return response;
 }
 
-async function loadEngine() {
+async function loadEngine(variant) {
+  if (!Object.hasOwn(KEYFORM_MODELS, variant)) throw new Error("Choose a supported model variant.");
+  const selected = KEYFORM_MODELS[variant];
   const [spec, config, dictionary, model] = await Promise.all([
     asset("tokenizer.json").then(response => response.json()),
     asset("tokenizer_config.json").then(response => response.json()),
     asset("spelling.json").then(response => response.json()),
-    asset("opt-int8.onnx").then(response => response.arrayBuffer()),
+    asset(selected.file).then(response => response.arrayBuffer()),
   ]);
-  self.postMessage({ status: "Starting prediction model…" });
-  const session = await InferenceSession.create(model, { executionProviders: ["wasm"] });
+  self.postMessage({ status: selected.weights.length ? "Loading model weights…" : "Starting prediction model…" });
+  const session = await InferenceSession.create(model, {
+    executionProviders: ["wasm"],
+    externalData: selected.weights.map(path => ({ path, data: new URL(path, assets).href })),
+  });
   const tokenizer = new Tokenizer(spec, config);
   const words = [];
   for (const [token, id] of tokenizer.get_vocab()) {
@@ -200,7 +205,7 @@ class Engine {
 
 self.onmessage = async ({ data: request }) => {
   try {
-    enginePromise ||= loadEngine().catch(error => {
+    enginePromise ||= loadEngine(request.variant).catch(error => {
       enginePromise = null;
       throw error;
     });

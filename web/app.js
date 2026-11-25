@@ -3,9 +3,10 @@
   function init() {
     const el = id => document.getElementById(id);
     const input = el("draft");
+    const variant = el("variant");
     const browserModel = document.body.dataset.predictions === "browser";
-    const modelSize = Number(document.body.dataset.modelSize);
-    const modelDownload = modelSize > 0 ? `${modelSize} MB` : "";
+    const browserModelSizes = browserModel ? JSON.parse(document.body.dataset.modelSizes) : {};
+    const modelDownload = () => browserModelSizes[variant.value] ? `${browserModelSizes[variant.value]} MB` : "";
     const chatSpeakers = ["User A", "User B"];
     const storagePrefix = "keyform.v1.";
     const messagePrefix = storagePrefix + "message.";
@@ -89,7 +90,7 @@
     };
     let mode = readSaved(storagePrefix + "mode") === "chat" ? "chat" : "solo";
     let version = 0, timer, busy = false, queued = false, preview = null;
-    let browserWorker, browserModelRequested = false, browserModelReady = false;
+    let browserWorker, rejectBrowserRequest, browserModelRequested = false, browserModelReady = false;
     const speaker = el("speaker");
     if (readSaved(storagePrefix + "speaker") === "User B") speaker.value = "User B";
 
@@ -113,6 +114,10 @@
       node.addEventListener("click", action);
       return node;
     };
+    const loadModelButton = button("suggestion", "", () => {
+      browserModelRequested = true;
+      schedule(0);
+    });
     function focus(offset = input.value.length) {
       input.focus({preventScroll: true});
       input.setSelectionRange(offset, offset);
@@ -242,8 +247,8 @@
       renderPreview();
       status(result.warning || (browserModel ? "Running on this device" : "Model ready"), result.warning ? "warning" : "ready");
       el("latency").textContent = Number(result.latencyMs).toFixed(1)+" ms";
-      el("footprint").textContent = browserModel ? modelDownload || "—" : result.footprint;
-      el("actual-model").textContent = browserModel ? "LoRA fine-tuned · INT8" : result.modelLabel || "";
+      el("footprint").textContent = browserModel ? modelDownload() || "—" : result.footprint;
+      el("actual-model").textContent = browserModel ? variant.selectedOptions[0].textContent : result.modelLabel || "";
       const choices = result.suggestions.map(({word}) => button("suggestion",word,() => choose(word,result.mode,false)));
       if (result.punctuation) choices.push(button("suggestion suggestion-punct", result.punctuation.word, () => choose(result.punctuation.word,result.mode,true)));
       el("suggestions").replaceChildren(...(choices.length ? choices : [make("span","suggest-empty",input.value ? "No matches. Keep typing." : "Type a message to see suggestions.")]));
@@ -257,26 +262,49 @@
     }
     function predictInBrowser(request, requestVersion) {
       return new Promise((resolve, reject) => {
-        const worker = browserWorker ??= new Worker(new URL("prediction-worker.js", document.baseURI), { type: "module" });
+        const worker = browserWorker ??= new Worker(new URL(document.body.dataset.worker, document.baseURI), { type: "module" });
+        rejectBrowserRequest = reject;
+        const finish = (callback, value) => {
+          rejectBrowserRequest = undefined;
+          callback(value);
+        };
         worker.onmessage = ({ data }) => {
           if (data.status) {
             if (requestVersion === version) status(data.status, "loading");
           } else if (data.error) {
-            reject(new Error(data.error));
+            finish(reject, new Error(data.error));
           } else if (data.result) {
-            resolve(data.result);
+            finish(resolve, data.result);
           } else {
-            reject(new Error("The browser engine returned an invalid response."));
+            finish(reject, new Error("The browser engine returned an invalid response."));
           }
         };
         worker.onerror = worker.onmessageerror = () => {
           worker.terminate();
           browserWorker = undefined;
           browserModelReady = false;
-          reject(new Error("Could not start the browser engine. Retry or try a current browser."));
+          finish(reject, new Error("Could not start the browser engine. Retry or try a current browser."));
         };
-        worker.postMessage({ ...request, confirmed: request.trustedWords });
+        try {
+          worker.postMessage({ ...request, confirmed: request.trustedWords });
+        } catch (error) {
+          finish(reject, error);
+        }
       });
+    }
+
+    function changeVariant() {
+      if (browserModel) {
+        browserWorker?.terminate();
+        browserWorker = undefined;
+        rejectBrowserRequest?.(new Error("Prediction model changed."));
+        rejectBrowserRequest = undefined;
+        browserModelRequested = browserModelReady = false;
+        el("footprint").textContent = modelDownload() || "—";
+        el("latency").textContent = "—";
+        el("actual-model").textContent = "";
+      }
+      schedule();
     }
 
     async function predict(requestVersion) {
@@ -284,7 +312,7 @@
       busy=true;
       try {
         const request = { draft:input.value, context: mode === "chat" ? logs.chat.slice(-2).map(m=>m.text) : [],
-          variant:el("variant").value, cacheWeight:Number(el("boost").value), spelling:el("spelling").checked,
+          variant:variant.value, cacheWeight:Number(el("boost").value), spelling:el("spelling").checked,
           cache:Object.fromEntries(profile().cache), trustedWords:[...profile().trusted] };
         let result;
         if (browserModel) {
@@ -317,13 +345,11 @@
       el("corrections").replaceChildren();
       const suggestions = el("suggestions");
       if (browserModel && !browserModelRequested) {
-        const label = modelDownload ? `Load prediction model (${modelDownload})` : "Load prediction model";
-        if (!suggestions.firstElementChild) {
-          suggestions.append(button("suggestion", label, () => {
-            browserModelRequested = true;
-            schedule(0);
-          }));
-        }
+        const download = modelDownload();
+        loadModelButton.textContent = download ? `Load prediction model (${download})` : "Load prediction model";
+        loadModelButton.disabled = false;
+        if (suggestions.firstElementChild !== loadModelButton) suggestions.replaceChildren(loadModelButton);
+        suggestions.setAttribute("aria-busy", "false");
         status("Runs on your device after download", "idle");
         return;
       }
@@ -374,12 +400,9 @@
     });
     el("send").addEventListener("click",send);
     el("boost").addEventListener("input",()=>{el("boost-value").textContent=Number(el("boost").value).toFixed(2);schedule();});
-    for(const id of ["variant","spelling"]) el(id).addEventListener("change",()=>schedule());
-    if (browserModel) {
-      el("variant").value = "lora_int8";
-      el("variant").disabled = true;
-      el("footprint").textContent = modelDownload || "—";
-    }
+    variant.addEventListener("change", changeVariant);
+    el("spelling").addEventListener("change", () => schedule());
+    if (browserModel) el("footprint").textContent = modelDownload() || "—";
     renderMode();
   }
   if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",init,{once:true}); else init();
