@@ -3,6 +3,7 @@
   function init() {
     const el = id => document.getElementById(id);
     const input = el("draft");
+    const draftPreview = el("draft-preview");
     const variant = el("variant");
     const browserModel = document.body.dataset.predictions === "browser";
     const browserModelSizes = browserModel ? JSON.parse(document.body.dataset.modelSizes) : {};
@@ -121,10 +122,20 @@
     function focus(offset = input.value.length) {
       input.focus({preventScroll: true});
       input.setSelectionRange(offset, offset);
+      if (offset === input.value.length) input.scrollTop = input.scrollHeight;
     }
     function status(text, state) {
       el("engine-status").textContent = text;
       el("engine-status").dataset.state = state;
+    }
+    function resizeDraft() {
+      const scrollTop = input.scrollTop;
+      input.style.overflowY = "hidden";
+      input.style.height = "auto";
+      input.style.height = `${input.scrollHeight}px`;
+      input.style.overflowY = "";
+      input.scrollTop = scrollTop;
+      draftPreview.style.width = `${input.clientWidth}px`;
     }
     function renderPreview() {
       let suffix = "";
@@ -133,13 +144,14 @@
         if (preview.mode === "Next-Word") suffix = preview.word;
         else if (partial && preview.word.toLowerCase().startsWith(partial.toLowerCase())) suffix = preview.word.slice(partial.length);
       }
-      el("draft-preview").hidden = el("preview-hint").hidden = !suffix;
+      draftPreview.hidden = el("preview-hint").hidden = !suffix;
       el("preview-prefix").textContent = suffix ? input.value : "";
       el("preview-tail").textContent = suffix;
-      el("draft-preview").scrollLeft = input.scrollLeft;
+      draftPreview.scrollTop = input.scrollTop;
     }
     function setDraft(text, caret) {
-      input.value = text;
+      if (input.value !== text) input.value = text;
+      resizeDraft();
       saveDraft(profileName(), text);
       if (!text) profile().dismissed.clear();
       el("send").disabled = !text.trim();
@@ -386,15 +398,22 @@
     });
     el("reset-cache").addEventListener("click",()=>{profile().cache.clear();profile().trusted.clear();renderVocabulary();schedule();});
     input.addEventListener("input",event=>{
-      if(event.isComposing) return;
+      if (event.isComposing) {
+        resizeDraft();
+        return;
+      }
       setDraft(input.value);el("send-status").textContent="";
     });
     input.addEventListener("compositionend",()=>setDraft(input.value));
     input.addEventListener("scroll",renderPreview);document.addEventListener("selectionchange",renderPreview);
+    window.addEventListener("resize", () => {
+      resizeDraft();
+      renderPreview();
+    });
     input.addEventListener("keydown",event=>{
       if(event.isComposing||event.keyCode===229) return;
-      if(event.key==="Enter") {event.preventDefault();send();}
-      if(event.key==="ArrowRight" && !event.shiftKey && preview && !el("draft-preview").hidden) {
+      if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); }
+      if(event.key==="ArrowRight" && !event.shiftKey && preview && !draftPreview.hidden) {
         event.preventDefault();choose(preview.word,preview.mode,false);
       }
     });

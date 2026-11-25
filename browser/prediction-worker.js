@@ -114,7 +114,7 @@ class Engine {
   async nextLogits(prefix) {
     const text = prefix.trim() ? prefix : "</s>";
     if (!this.logitCache.has(text)) {
-      const ids = this.encode(text, true).slice(0, MAX_CONTEXT);
+      const ids = this.encode(text, true).slice(-MAX_CONTEXT);
       const logits = await this.infer([ids], [ids.length - 1]);
       if (this.logitCache.size === 12) this.logitCache.delete(this.logitCache.keys().next().value);
       this.logitCache.set(text, logits.data);
@@ -159,10 +159,9 @@ class Engine {
     const isUsableCacheWord = word => confirmedSet.has(word) || !this.isDetectableTypo(word);
     const previous = context.map(message => message.trim()).filter(Boolean).join(" ");
     const text = previous ? previous + " " + (draft.trim() ? draft : "") : draft;
-    const next = text.endsWith(" ");
-    const split = text.lastIndexOf(" ");
-    const prefix = next ? text.trimEnd() : split >= 0 ? text.slice(0, split) : "";
-    const partial = next ? "" : text.slice(split + 1);
+    const next = /\s$/u.test(text);
+    const partial = next ? "" : text.match(/\S+$/u)?.[0] || "";
+    const prefix = text.slice(0, text.length - partial.length).trimEnd();
     const lower = partial.toLowerCase();
     const mode = !text ? "Starter" : next ? "Next-Word" : "Prefix-Completion";
     let suggestions;
@@ -183,7 +182,7 @@ class Engine {
       if (/^\p{Lu}/u.test(partial)) suggestions.forEach(item => { item.word = capitalize(item.word); });
     }
     let punctuation = null;
-    if (draft.trim() && /[\p{L}\p{N}]$/u.test(text.trimEnd()) && (next || text.trimEnd().includes(" "))) {
+    if (draft.trim() && /[\p{L}\p{N}]$/u.test(text.trimEnd()) && (next || /\s/u.test(text.trimEnd()))) {
       const logits = await this.nextLogits(text.trimEnd());
       punctuation = rank(this.punctuation, id => logits[id], 4)[0];
     }
