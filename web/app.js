@@ -255,7 +255,8 @@
         node.append(...parts);
         return node;
       }));
-      setDraft(profile().draft); renderHistory(); renderVocabulary();
+      setDraft(profile().draft, settings.open ? undefined : profile().draft.length);
+      renderHistory(); renderVocabulary();
     }
     function showPrediction(result) {
       preview = result.suggestions.length ? {word:result.suggestions[0].word,mode:result.mode} : null;
@@ -419,11 +420,16 @@
       renderPreview();
     });
     input.addEventListener("keydown",event=>{
-      if(event.isComposing||event.keyCode===229) return;
+      if (event.isComposing || event.keyCode === 229) return;
       if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); }
-      if(event.key==="ArrowRight" && !event.shiftKey && preview && !draftPreview.hidden) {
-        event.preventDefault();choose(preview.word,preview.mode,false);
-      }
+    });
+    document.addEventListener("keydown", event => {
+      if (event.key !== "ArrowRight" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+      if (event.isComposing || settings.open || !preview || draftPreview.hidden) return;
+      const active = document.activeElement;
+      if (active !== input && ["INPUT", "TEXTAREA", "SELECT"].includes(active?.tagName)) return;
+      event.preventDefault();
+      choose(preview.word, preview.mode, false);
     });
     el("send").addEventListener("click",send);
     el("boost").addEventListener("input",()=>{el("boost-value").textContent=Number(el("boost").value).toFixed(2);schedule();});
