@@ -249,7 +249,10 @@
           el("send-status").textContent = "";
           setDraft(entry[1], entry[1].length);
         });
-        node.append(make("span","prompt-name",entry[0]), make("span","prompt-arrow","↗"));
+        const parts = [make("span", "prompt-name", entry[0])];
+        if (mode === "solo") parts.push(make("span", "prompt-preview", entry[1]));
+        parts.push(make("span", "prompt-arrow", "↗"));
+        node.append(...parts);
         return node;
       }));
       setDraft(profile().draft); renderHistory(); renderVocabulary();
