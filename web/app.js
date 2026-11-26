@@ -82,11 +82,16 @@
       writeSaved(storagePrefix + "draft." + name, text);
     }
     const prompts = {
-      solo: [["Train meetup", "Sure, I will meet you at the train "],
-        ["Grocery run", "I am heading to the groc"], ["Lunch plans", "Hey! Are you free for lun"]],
-      chat: [["Lunch invite", "Hey! Are you free for lunch today?", ""],
-        ["Phone battery", "My phone battery is at 1%, do you have a charger?", "Yes, I have a "],
-        ["Train meetup", "I just arrived at the station, where are you?", "I am on my "]]
+      solo: [
+        ["Train meetup", "Sure, I will meet you at the train "],
+        ["Grocery run", "I am heading to the groc"],
+        ["Lunch plans", "Hey! Are you free for lun"]
+      ],
+      chat: [
+        ["Lunch invite", "Hey! Are you free for lunch today?"],
+        ["Phone battery", "My phone battery is at 1%, do you have a charger?"],
+        ["Train meetup", "I just arrived at the station, where are you?"]
+      ]
     };
     let mode = readSaved(storagePrefix + "mode") === "chat" ? "chat" : "solo";
     let version = 0, timer, busy = false, queued = false, preview = null;
@@ -240,13 +245,9 @@
       el("send-status").textContent = "";
       el("prompts").replaceChildren(...prompts[mode].map(entry => {
         const node = button("prompt", "", () => {
-          if (mode === "chat") {
-            addMessage("User A", entry[1], true);
-            selectSpeaker("User B");
-          }
           profile().dismissed.clear();
-          setDraft(entry[mode === "solo" ? 1 : 2], entry[mode === "solo" ? 1 : 2].length);
-          renderHistory(); renderVocabulary();
+          el("send-status").textContent = "";
+          setDraft(entry[1], entry[1].length);
         });
         node.append(make("span","prompt-name",entry[0]), make("span","prompt-preview",entry[1]), make("span","prompt-arrow","↗"));
         return node;
