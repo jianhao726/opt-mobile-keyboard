@@ -241,7 +241,7 @@
     }
     function renderMode() {
       for (const name of ["solo","chat"]) el("mode-"+name).setAttribute("aria-pressed", String(mode===name));
-      el("chat-controls").hidden = mode !== "chat";
+      for (const label of el("chat-controls").querySelectorAll("label")) label.hidden = mode !== "chat";
       el("send-status").textContent = "";
       el("prompts").replaceChildren(...prompts[mode].map(entry => {
         const node = button("prompt", "", () => {
@@ -390,13 +390,18 @@
       renderMode();
     });
     el("reset-chat").addEventListener("click", () => {
-      for (const { key } of logs.chat) writeSaved(key, "");
-      logs.chat = [];
-      for (const name of chatSpeakers) {
-        saveDraft(name, "");
-        profiles[name].dismissed.clear();
+      for (const { key } of logs[mode]) writeSaved(key, "");
+      logs[mode] = [];
+      if (mode === "chat") {
+        for (const name of chatSpeakers) {
+          saveDraft(name, "");
+          profiles[name].dismissed.clear();
+        }
+        selectSpeaker("User A");
+      } else {
+        saveDraft("Solo", "");
+        profiles.Solo.dismissed.clear();
       }
-      selectSpeaker("User A");
       renderMode();
     });
     el("reset-cache").addEventListener("click",()=>{profile().cache.clear();profile().trusted.clear();renderVocabulary();schedule();});
